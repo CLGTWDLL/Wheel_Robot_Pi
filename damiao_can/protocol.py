@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 
@@ -12,6 +13,8 @@ class CanFrame:
     data: bytes
 
     def __post_init__(self) -> None:
+        if not 0x000 <= self.arbitration_id <= 0x7FF:
+            raise ValueError("CAN arbitration_id must be in standard 11-bit range 0x000..0x7FF")
         if len(self.data) != 8:
             raise ValueError("CAN frame data must be 8 bytes")
 
@@ -37,6 +40,8 @@ class RoutedFeedback:
 
 
 def float_to_uint(value: float, minimum: float, maximum: float, bits: int) -> int:
+    if not math.isfinite(value):
+        raise ValueError("command value must be finite")
     value = min(max(value, minimum), maximum)
     return int((value - minimum) * ((1 << bits) - 1) / (maximum - minimum))
 
@@ -92,12 +97,22 @@ def mit_frame(
 
 
 def velocity_frame(motor: MotorConfig, *, velocity: float = 0.0) -> CanFrame:
+    if not math.isfinite(velocity):
+        raise ValueError("velocity command must be finite")
+    if not -motor.v_max <= velocity <= motor.v_max:
+        raise ValueError(f"velocity command must be within [{-motor.v_max}, {motor.v_max}]")
     return CanFrame(0x200 + motor.can_id, struct.pack("<f", velocity) + b"\x00\x00\x00\x00")
 
 
 def decode_feedback_frame(frame: CanFrame) -> RoutedFeedback:
     motor = get_motor_by_master_id(frame.arbitration_id)
-    return RoutedFeedback(motor=motor, feedback=decode_feedback(frame.data, motor))
+    feedback = decode_feedback(frame.data, motor)
+    expected_motor_id = motor.can_id & 0x0F
+    if feedback.motor_id != expected_motor_id:
+        raise ValueError(
+            f"feedback motor_id 0x{feedback.motor_id:X} does not match expected 0x{expected_motor_id:X}"
+        )
+    return RoutedFeedback(motor=motor, feedback=feedback)
 
 
 def decode_feedback(data: bytes, motor: MotorConfig) -> Feedback:

@@ -51,6 +51,14 @@ def test_motor_registry_has_four_configs_and_lookup_by_name_and_master_id() -> N
         get_motor_by_master_id(0x99)
 
 
+def test_can_frame_rejects_invalid_arbitration_id() -> None:
+    with pytest.raises(ValueError, match="arbitration_id"):
+        CanFrame(arbitration_id=0x800, data=b"\x00" * 8)
+
+    with pytest.raises(ValueError, match="arbitration_id"):
+        CanFrame(arbitration_id=-1, data=b"\x00" * 8)
+
+
 def test_standard_command_frames() -> None:
     motor = get_motor("dm4310_left")
 
@@ -79,6 +87,31 @@ def test_velocity_mode_for_dmh6215_left_uses_float_payload_and_speed_id() -> Non
     assert frame.arbitration_id == 0x204
     assert frame.data[:4] == struct.pack("<f", 1.25)
     assert frame.data[4:] == b"\x00\x00\x00\x00"
+
+
+@pytest.mark.parametrize("velocity", [float("nan"), float("inf"), float("-inf"), 45.01, -45.01])
+def test_velocity_frame_rejects_non_finite_and_over_limit_values(velocity: float) -> None:
+    motor = get_motor("dmh6215_left")
+
+    with pytest.raises(ValueError):
+        velocity_frame(motor, velocity=velocity)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("position", float("nan")),
+        ("velocity", float("inf")),
+        ("kp", float("-inf")),
+        ("kd", float("nan")),
+        ("torque", float("inf")),
+    ],
+)
+def test_mit_frame_rejects_non_finite_command_values(field: str, value: float) -> None:
+    motor = get_motor("dm4310_left")
+
+    with pytest.raises(ValueError, match="finite"):
+        mit_frame(motor, **{field: value})
 
 
 def test_feedback_decode_extracts_id_state_bit_fields_and_temperatures() -> None:
@@ -113,6 +146,20 @@ def test_decode_feedback_frame_routes_by_master_id_and_rejects_unknown_id() -> N
         decode_feedback_frame(CanFrame(arbitration_id=0x99, data=payload))
 
 
+def test_decode_feedback_frame_rejects_master_id_payload_motor_id_mismatch() -> None:
+    payload = bytes([0x33, 0x12, 0x34, 0xAB, 0xCD, 0xEF, 66, 77])
+
+    with pytest.raises(ValueError, match="motor_id"):
+        decode_feedback_frame(CanFrame(arbitration_id=0x14, data=payload))
+
+
+def test_decode_feedback_rejects_non_8_byte_payload() -> None:
+    motor = get_motor("dm4310_left")
+
+    with pytest.raises(ValueError, match="8 bytes"):
+        decode_feedback(b"\x00" * 7, motor)
+
+
 def test_parameter_read_write_save_frames_use_fixed_id_and_command_bytes() -> None:
     motor = get_motor("dmh6215_left")
 
@@ -127,3 +174,11 @@ def test_parameter_read_write_save_frames_use_fixed_id_and_command_bytes() -> No
     assert write.data[4:] == struct.pack("<f", 2.5)
     assert save.arbitration_id == 0x7FF
     assert save.data == bytes([0x04, 0x00, 0xAA, 0x01, 0, 0, 0, 0])
+
+
+@pytest.mark.parametrize("value", [b"\x00" * 3, b"\x00" * 5])
+def test_parameter_write_frame_rejects_non_4_byte_value(value: bytes) -> None:
+    motor = get_motor("dmh6215_left")
+
+    with pytest.raises(ValueError, match="4 bytes"):
+        parameter_write_frame(motor, register_id=0x0A, value=value)
