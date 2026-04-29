@@ -1,388 +1,443 @@
-# Implementation Plan: 达妙四电机 USB-CAN 控制器
+# macOS USB-CAN / 达妙电机调通计划
 
 ## Context
 
-本计划基于 `/Users/cqc/mojoco_lqr/SPEC.md`。目标是在 macOS 上通过达妙官方 USB-CAN 工具同步控制四个达妙电机：DM4310 左右腿部关节使用 MIT 模式，DMH6215 左右轮毂电机第一阶段使用速度模式。运行时控制目标是四电机同步执行和反馈聚合；单电机测试仅作为首次实机验证的安全 bring-up 步骤。实现必须支持 dry-run、反馈帧解析、Master_ID 匹配、安全 gating，并在任何硬件冒烟测试结束前失能电机。
+目标是在 macOS 上通过已连接的 USB-CAN 串口设备调通 4 个达妙电机和 DM-IMU：Python 负责 CLI、设备表、协议组织和安全限幅，C++ 负责底层串口/CAN 帧收发。第一阶段重点不是高性能控制，而是安全确认“4 个电机能否一起接收命令”，并保持测试参数保守。
 
-用户要求最终在仓库中保存：
+已读取并核对：
 
-- `/Users/cqc/mojoco_lqr/tasks/plan.md`
-- `/Users/cqc/mojoco_lqr/tasks/todo.md`
+- `SPEC.md`：已确认 Python 主入口、C++ 底层、SLCAN/串口、保守 group 测试边界。
+- `CLAUDE.md`：硬件 CAN 配置：DM-IMU `0x01/0x11`，DM4310 左右 `0x02/0x12`、`0x03/0x13` MIT，DMH6215 左右 `0x04/0x14`、`0x05/0x15` 力矩。
+- `control/damiao_can/protocol.py`：已有 `CanFrame`、MIT 编码、enable/disable/zero-position、反馈解码、参数帧。
+- `control/damiao_can/motors.py`：已有 4 电机表，但 DMH6215 当前是 `velocity`，需要改成 `torque`。
+- `pyproject.toml`：当前仅有 `mujoco` 依赖；后续可能需要 `pyserial`、`pytest`、`pybind11`。
 
-本文件已按批准计划保存到仓库，供后续实现任务执行。
+关键约束：
 
-## Architecture Decisions
+- `group zero` 必须表示“4 电机零输出”，不能调用 `zero_position_frame`/`0xFE` 设零点。
+- 多电机非零测试必须在单电机测试和 `group zero` 之后。
+- 非零命令必须有 duration，结束和异常路径都要发送零输出或 disable。
+- 默认测试参数保守：不为了看见明显动作而提高默认力矩/速度/位置范围。
 
-- 新增 `damiao_can/` 包，不改动现有 MuJoCo 仿真代码。
-- 协议层保持纯函数，不导入 `python-can`，便于无硬件测试。
-- `motors.py` 固化四电机配置和安全限制。
-- `bus.py` 是唯一打开硬件的模块，使用 `can.Bus(interface="damiao", channel=<serial>, bitrate=1000000)`。
-- CLI 默认 dry-run 优先；真实非零命令必须显式 `--allow-motion`。
-- 运行时控制目标是四电机同步命令执行和反馈聚合，而不是主要逐个电机控制。
-- 反馈判断以 `msg.arbitration_id == motor.master_id` 为准，不能把发送成功确认当作电机反馈。
-- 第一阶段不做 MuJoCo/LQR 闭环集成，不写入电机 flash 参数。
-
-## Dependency Graph
+## Dependency graph
 
 ```text
-pyproject dependencies: python-can, python-can-damiao
-  └── damiao_can package
-      ├── motors.py
-      │   └── four motor registry + master_id lookup
-      ├── protocol.py
-      │   ├── command frames: enable / disable / clear-error / zero
-      │   ├── MIT packing for DM4310
-      │   ├── velocity packing for DMH6215
-      │   ├── parameter frames
-      │   └── feedback decoding
-      ├── bus.py
-      │   ├── create damiao serial bus
-      │   ├── send can.Message
-      │   └── recv feedback by Master_ID
-      └── cli.py
-          ├── dry-run status
-          ├── enable-all / disable-all / clear-error
-          ├── DM4310 mit
-          ├── DMH6215 velocity
-          └── guarded smoke-test
-
-tests
-  ├── test_damiao_protocol.py depends on motors.py + protocol.py
-  └── test_damiao_cli.py depends on cli.py dry-run paths
+SPEC.md + CLAUDE.md
+  -> 设备表与模式定义
+     -> 协议编码/反馈解码
+     -> 安全限幅与 duration 策略
+        -> 单电机命令构建
+        -> group zero / group conservative-test 命令构建
+           -> FakeCanBus 与执行器
+           -> macOS C++ 串口/CAN backend
+              -> Python slcan wrapper
+                 -> CLI: list-ports / sniff / motor / group / imu
+                    -> 实机验证流程
 ```
 
-## Task List
+## Recommended implementation slices
 
-### Phase 1: Planning Artifacts and Protocol Foundation
+### Phase 1: 离线基础与安全闭环
 
-#### Task 1: Save repo task documents
+#### Task 1 — 对齐设备表与硬件配置
 
-**Description:** Create the requested planning files in the repository so future agents can execute from stable artifacts.
+改动目标：`control/damiao_can/motors.py`，必要时新增 `control/devices.py`。
 
-**Acceptance criteria:**
-- [ ] `/Users/cqc/mojoco_lqr/tasks/plan.md` contains the approved implementation plan.
-- [ ] `/Users/cqc/mojoco_lqr/tasks/todo.md` contains an ordered checkbox task list.
-- [ ] No source code is changed in this task.
+验收标准：
 
-**Verification:**
-- [ ] Read both files and confirm content matches the approved plan.
+- 设备表包含 `dm_imu`、`dm4310_left`、`dm4310_right`、`dmh6215_left`、`dmh6215_right`。
+- CAN_ID/MST_ID 与 `CLAUDE.md` 完全一致。
+- DM4310 模式为 `mit`。
+- DMH6215 模式改为 `torque`。
+- 没有暴露参数保存、写 flash 或设零点的默认实机命令。
 
-**Dependencies:** Plan approval.
+验证：
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/tasks/plan.md`
-- `/Users/cqc/mojoco_lqr/tasks/todo.md`
+- `uv run pytest tests/test_devices.py`
+- 测试覆盖设备名、CAN_ID、MST_ID、mode。
 
-**Estimated scope:** S
+#### Task 2 — 补齐协议 command builders
 
-#### Task 2: Add package skeleton and motor registry
+改动目标：复用 `control/damiao_can/protocol.py`，新增 `control/damiao_can/commands.py`。
 
-**Description:** Add `damiao_can` package with static four-motor configuration and lookup helpers.
+验收标准：
 
-**Acceptance criteria:**
-- [ ] `dm4310_left`: CAN_ID `0x02`, Master_ID `0x12`, mode `mit`.
-- [ ] `dm4310_right`: CAN_ID `0x03`, Master_ID `0x13`, mode `mit`.
-- [ ] `dmh6215_left`: CAN_ID `0x04`, Master_ID `0x14`, mode `velocity`.
-- [ ] `dmh6215_right`: CAN_ID `0x05`, Master_ID `0x15`, mode `velocity`.
-- [ ] Lookup by motor name and Master_ID works with clear errors for unknown values.
+- 继续复用 enable/disable/MIT 编码。
+- 增加 DMH6215 torque-mode frame builder。
+- `group zero` 生成 4 帧，顺序固定为 `dm4310_left`、`dm4310_right`、`dmh6215_left`、`dmh6215_right`。
+- `group zero` 明确不调用 `zero_position_frame`，不产生 `0xFE`。
 
-**Verification:**
-- [ ] `uv run pytest tests/test_damiao_protocol.py`
-- [ ] `uv run pytest`
+验证：
 
-**Dependencies:** Task 1.
+- `uv run pytest tests/test_damiao_protocol.py`
+- 测试覆盖帧数据长度、arbitration_id、group 顺序、无 `0xFE`。
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/damiao_can/__init__.py`
-- `/Users/cqc/mojoco_lqr/damiao_can/motors.py`
-- `/Users/cqc/mojoco_lqr/tests/test_damiao_protocol.py`
+#### Task 3 — 集中安全限幅与 duration 策略
 
-**Estimated scope:** S
+改动目标：新增 `control/damiao_can/safety.py`。
 
-#### Task 3: Implement pure protocol packing and feedback decoding
+验收标准：
 
-**Description:** Implement deterministic CAN frame helpers with no hardware dependency.
+- 非零 torque/运动命令没有 duration 时拒绝。
+- duration 默认不超过 `0.5 s`，越界拒绝或要求显式调整。
+- torque 默认示例 `0.02–0.05 N·m`，硬上限 `0.05 N·m`。
+- NaN/inf 全部拒绝。
+- `motor torque` 只允许 torque-mode 电机。
+- group conservative 参数集中定义，不散落在 CLI 中。
+- DM4310 conservative-test 不默认用高增益拉到绝对 0 位。
 
-**Acceptance criteria:**
-- [ ] Enable payload is `FF FF FF FF FF FF FF FC`.
-- [ ] Disable payload is `FF FF FF FF FF FF FF FD`.
-- [ ] Clear-error payload is `FF FF FF FF FF FF FF FB`.
-- [ ] MIT packing uses frame ID `CAN_ID` and correct 16/12/12/12/12-bit packing.
-- [ ] Velocity mode uses frame ID `0x200 + CAN_ID`, little-endian float in bytes 0-3, zeros in bytes 4-7.
-- [ ] Feedback decoding extracts payload ID, state, position, velocity, torque, MOS temperature, rotor temperature.
-- [ ] Parameter read/write/save helpers use arbitration ID `0x7FF` and command bytes `0x33`, `0x55`, `0xAA` if included in this phase.
+验证：
 
-**Verification:**
-- [ ] `uv run pytest tests/test_damiao_protocol.py`
-- [ ] `uv run pytest`
+- `uv run pytest tests/test_safety.py`
 
-**Dependencies:** Task 2.
+#### Task 4 — FakeCanBus 与命令执行器
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/damiao_can/protocol.py`
-- `/Users/cqc/mojoco_lqr/tests/test_damiao_protocol.py`
+改动目标：新增 `control/bus.py`、`control/fake_bus.py`，命令执行逻辑放在 `control/damiao_can/commands.py` 或专门 runner 中。
 
-**Estimated scope:** M
+验收标准：
 
-### Checkpoint: Protocol Foundation
+- FakeCanBus 可记录发送帧、模拟 receive timeout、注入反馈帧/IMU raw frame。
+- 非零命令执行器使用 `try/finally`，结束和异常路径都会发送零输出。
+- fake 模式可完整跑 `group zero` 和 `group conservative-test`。
 
-- [ ] Protocol tests pass without CAN hardware.
-- [ ] `protocol.py` does not import `can`, `serial`, or hardware modules.
-- [ ] Frame bytes match `SPEC.md` and docs references.
-- [ ] Feedback routing design uses Master_ID.
+验证：
 
-### Phase 2: Dry-Run CLI Vertical Slice
+- `uv run pytest tests/test_fake_bus.py tests/test_group_commands.py`
+- `uv run python -m control.can_tool group zero --backend fake --duration 0.1`
+- `uv run python -m control.can_tool group conservative-test --backend fake --duration 0.1`
 
-#### Task 4: Implement dry-run status command
+Checkpoint A：只有在 `uv run pytest` 通过、设备表一致、DMH6215 模式已修正、`group zero` 确认不是设零点后，才进入真实串口 backend。
 
-**Description:** Provide a no-hardware CLI path that prints configured motors and representative frames.
+### Phase 2: macOS 串口/CAN backend 与只读 CLI
 
-**Acceptance criteria:**
-- [ ] `uv run python -m damiao_can.cli --dry-run status` works without CAN hardware.
-- [ ] Output includes motor name, CAN_ID, Master_ID, mode, and representative frame info.
-- [ ] Dry-run does not import/open `can.Bus`.
-- [ ] Unknown command or motor returns a clear nonzero error.
+#### Task 5 — 实现 macOS C++ 串口/CAN backend
 
-**Verification:**
-- [ ] `uv run pytest tests/test_damiao_cli.py`
-- [ ] `uv run pytest`
-- [ ] Manual: `uv run python -m damiao_can.cli --dry-run status`
+改动目标：新增 `control/native/slcan_bus.cpp`、`control/native/bindings.cpp`、`control/slcan.py`，并更新 `pyproject.toml` 构建依赖。
 
-**Dependencies:** Tasks 2-3.
+验收标准：
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/damiao_can/cli.py`
-- `/Users/cqc/mojoco_lqr/tests/test_damiao_cli.py`
+- 使用 macOS POSIX/termios，不依赖 Linux-only 头文件。
+- open/read/write/close 都有 timeout 或明确错误。
+- Python 侧统一暴露 `send(CanFrame)` / `recv(timeout)`。
+- 底层 codec 先按实机确认：标准 ASCII SLCAN 或达妙 USB-CAN 二进制串口协议；上层接口保持不变。
+- 不存在串口时错误清楚，不 hang。
 
-**Estimated scope:** M
+验证：
 
-#### Task 5: Extend dry-run for all planned commands and safety gates
+- `uv run pytest tests/test_slcan_codec.py`
+- `uv run python -m control.can_tool sniff --port /dev/nonexistent --duration 0.2`
 
-**Description:** Make every hardware command previewable before real CAN sends.
+#### Task 6 — 实现 `list-ports` 与 `sniff`
 
-**Acceptance criteria:**
-- [ ] Dry-run supports `enable-all`, `disable-all`, `clear-error`, `mit`, `velocity`, and `smoke-test`.
-- [ ] DM4310 `mit` defaults to zero command.
-- [ ] DMH6215 `velocity` defaults to zero command.
-- [ ] Real nonzero position, velocity, torque, `kp`, or `kd` requires `--allow-motion`.
-- [ ] Dry-run `smoke-test` includes final disable operation.
+改动目标：新增/完善 `control/can_tool.py`。
 
-**Verification:**
-- [ ] `uv run pytest tests/test_damiao_cli.py`
-- [ ] `uv run pytest`
-- [ ] Manual dry-runs for `status`, `smoke-test`, `mit --motor dm4310_left`, and `velocity --motor dmh6215_left --velocity 0`.
+验收标准：
 
-**Dependencies:** Task 4.
+- `list-ports` 列出 macOS `/dev/cu.*` 和 `/dev/tty.*`。
+- `sniff` 支持 `--port`、`--serial-baud`、`--can-bitrate`、`--duration`。
+- CLI 打印 backend、serial baud、CAN bitrate。
+- 打印 timestamp、arbitration_id、dlc、data。
+- timeout 后正常退出。
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/damiao_can/cli.py`
-- `/Users/cqc/mojoco_lqr/tests/test_damiao_cli.py`
+验证：
 
-**Estimated scope:** M
+- `uv run python -m control.can_tool list-ports`
+- `uv run python -m control.can_tool sniff --port /dev/nonexistent --duration 0.2`
+- `uv run pytest tests/test_cli.py`
 
-### Checkpoint: Safe No-Hardware Usability
+Checkpoint B：确认能找到 USB-CAN 串口，确认设备真实协议，且仍未发送任何非零电机输出。
 
-- [ ] `uv run pytest tests/test_damiao_protocol.py tests/test_damiao_cli.py` passes.
-- [ ] `uv run pytest` passes.
-- [ ] Every command can be inspected via dry-run.
-- [ ] Safety gate blocks accidental real nonzero motion.
+### Phase 3: 单设备实机闭环
 
-### Phase 3: CAN Bus and Feedback Slice
+#### Task 7 — 单电机 enable/disable
 
-#### Task 6: Add dependencies and macOS Damiao bus adapter
+改动目标：`control/can_tool.py`、`control/damiao_can/commands.py`。
 
-**Description:** Add `python-can` and `python-can-damiao`, then isolate hardware access in `bus.py`.
+验收标准：
 
-**Acceptance criteria:**
-- [ ] `pyproject.toml` and `uv.lock` include `python-can` and `python-can-damiao`.
-- [ ] Bus creation uses `interface="damiao"`, explicit `--channel`, and default bitrate `1000000`.
-- [ ] No Linux SocketCAN `can0` assumption is introduced.
-- [ ] CLI can list or instruct how to list serial ports.
+- 只接受已知 motor name。
+- 命令打印 motor name、CAN_ID、MST_ID、mode。
+- enable/disable 只发送对应标准帧，不附带非零控制。
+- 收到反馈时打印 position、velocity、torque、temperature；无反馈时明确 timeout。
 
-**Verification:**
-- [ ] `uv run pytest`
-- [ ] `uv run python -c "import can; import damiao_can.bus"`
-- [ ] `uv run python -m serial.tools.list_ports -v`
+验证：
 
-**Dependencies:** Tasks 4-5.
+- fake bus 测试 enable/disable frame。
+- 实机单电机：`uv run python -m control.can_tool motor enable --port <PORT> --motor dm4310_left` 后立即 disable。
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/pyproject.toml`
-- `/Users/cqc/mojoco_lqr/uv.lock`
-- `/Users/cqc/mojoco_lqr/damiao_can/bus.py`
-- `/Users/cqc/mojoco_lqr/damiao_can/cli.py`
+#### Task 8 — 单个 DMH6215 保守 torque 测试
 
-**Estimated scope:** M
+改动目标：`control/can_tool.py`、`control/damiao_can/safety.py`、`control/damiao_can/commands.py`。
 
-#### Task 7: Implement feedback receive by Master_ID
+验收标准：
 
-**Description:** Decode only real feedback messages whose arbitration ID matches configured Master_ID.
+- 只允许 `dmh6215_left/right`。
+- 默认 torque 不超过 `0.05 N·m`，建议先用 `0.02 N·m`。
+- 默认 duration 不超过 `0.5 s`。
+- 执行顺序：零输出 -> enable -> 小 torque -> 零输出 -> disable/安全状态。
+- Ctrl-C 或异常时仍发送零输出。
 
-**Acceptance criteria:**
-- [ ] Feedback helper ignores unrelated arbitration IDs.
-- [ ] `0x12`, `0x13`, `0x14`, `0x15` map to the correct motors.
-- [ ] Sending success is not considered motor response.
-- [ ] CLI can print decoded timestamp, motor name, state, position, velocity, torque, MOS temp, rotor temp.
+验证：
 
-**Verification:**
-- [ ] Unit tests with fake messages.
-- [ ] `uv run pytest tests/test_damiao_protocol.py tests/test_damiao_cli.py`
-- [ ] `uv run pytest`
+- `uv run pytest tests/test_safety.py tests/test_cli.py`
+- 实机：`uv run python -m control.can_tool motor torque --port <PORT> --motor dmh6215_left --torque 0.02 --duration 0.3`
 
-**Dependencies:** Task 6.
+#### Task 9 — IMU raw read
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/damiao_can/bus.py`
-- `/Users/cqc/mojoco_lqr/damiao_can/protocol.py`
-- `/Users/cqc/mojoco_lqr/tests/test_damiao_protocol.py`
+改动目标：`control/can_tool.py`，必要时新增 `control/damiao_can/imu.py`。
 
-**Estimated scope:** M
+验收标准：
 
-### Checkpoint: Hardware Boundary Ready
+- `imu read` 支持 duration。
+- 打印 timestamp、CAN ID、dlc、raw data。
+- 能标记疑似 DM-IMU 帧；第一版不强求完整姿态解析。
+- 不发送任何电机控制帧。
 
-- [ ] Tests pass without hardware.
-- [ ] CAN imports are isolated to bus/CLI paths.
-- [ ] Feedback matching is proven by tests using Master_ID.
-- [ ] macOS serial discovery command is documented and works.
+验证：
 
-### Phase 4: Conservative Hardware Commands
+- `uv run python -m control.can_tool imu read --port <PORT> --duration 5.0`
+- fake bus 注入 IMU frame 测试。
 
-#### Task 8: Wire real enable/disable/clear-error commands
+Checkpoint C：`sniff` 稳定、单电机 enable/disable 可用、单个 DMH6215 小 torque 能安全退出、IMU read 能运行到 duration 结束后，才进入 4 电机联动。
 
-**Description:** Connect safe all-motor command paths to the bus wrapper.
+### Phase 4: 四电机保守联动
 
-**Acceptance criteria:**
-- [ ] `enable-all`, `disable-all`, and `clear-error` send standard 8-byte frames to all four CAN_IDs.
-- [ ] Commands print sent arbitration ID and payload.
-- [ ] Errors are clear and do not hide partial send state.
-- [ ] `disable-all` remains a simple cleanup command.
+#### Task 10 — `group zero`
 
-**Verification:**
-- [ ] `uv run pytest`
-- [ ] Manual hardware only after explicit approval: dry-run → real `disable-all` → staged enable/zero feedback check if needed → synchronized zero-command check → `disable-all`.
+改动目标：`control/can_tool.py`、`control/damiao_can/commands.py`、`tests/test_group_commands.py`。
 
-**Dependencies:** Tasks 6-7.
+验收标准：
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/damiao_can/cli.py`
-- `/Users/cqc/mojoco_lqr/damiao_can/bus.py`
+- 每个周期发送 4 台电机零输出帧，顺序固定。
+- 默认 duration `1.0 s`，period 保守，例如 `50 ms`。
+- 打印每台设备 CAN_ID、MST_ID、mode、frame arbitration_id。
+- 不使用 `0xFE` 设零点，不发送参数写入/保存。
+- 结束时再次发送零输出或 disable，并打印最终状态。
 
-**Estimated scope:** S
+验证：
 
-#### Task 9: Wire bring-up-only single-motor MIT and velocity commands with safety gates
+- `uv run pytest tests/test_group_commands.py`
+- fake：`uv run python -m control.can_tool group zero --backend fake --duration 1.0`
+- 实机：`uv run python -m control.can_tool group zero --port <PORT> --duration 1.0`
 
-**Description:** Add real single-motor paths for DM4310 MIT and DMH6215 wheel velocity mode as safety bring-up tools, not as the final runtime control model.
+Checkpoint D：人工确认电机安全支撑、急停/断电可用、`group zero` 无异常、4 电机均已发送且无持续输出后，才运行 conservative-test。
 
-**Acceptance criteria:**
-- [ ] DM4310 `mit` rejects DMH6215 motors.
-- [ ] DMH6215 `velocity` rejects DM4310 motors.
-- [ ] Zero commands can run without `--allow-motion`.
-- [ ] Nonzero command values require `--allow-motion` and conservative limit checks.
-- [ ] After send, command attempts to read matching Master_ID feedback and reports whether the target responded.
+#### Task 11 — `group conservative-test`
 
-**Verification:**
-- [ ] CLI tests for allowed/rejected motor-mode combinations.
-- [ ] CLI tests for nonzero safety gate.
-- [ ] `uv run pytest`
+改动目标：`control/can_tool.py`、`control/damiao_can/commands.py`、`control/damiao_can/safety.py`。
 
-**Dependencies:** Task 8.
+验收标准：
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/damiao_can/cli.py`
-- `/Users/cqc/mojoco_lqr/damiao_can/bus.py`
-- `/Users/cqc/mojoco_lqr/tests/test_damiao_cli.py`
+- 启动时提示必须先完成 `group zero`。
+- 命令自身内置 pre-zero。
+- DM4310 使用零输出或当前位姿低增益 hold；没有可靠反馈时不拉绝对 0 位。
+- DMH6215 torque 不超过安全上限，默认建议 `0.02 N·m`，最多 `0.05 N·m`。
+- duration 默认不超过 `0.5 s`。
+- 每个控制周期 4 帧同一 batch 发送，顺序固定。
+- 结束、异常、Ctrl-C 都发送 group zero，并尽量 disable。
+- 不自动重试或提高参数。
 
-**Estimated scope:** M
+验证：
 
-#### Task 10: Implement guarded synchronized four-motor command path
+- `uv run pytest tests/test_group_commands.py`
+- fake：`uv run python -m control.can_tool group conservative-test --backend fake --duration 0.5`
+- 实机前必须通过 Checkpoint D。
+- 实机：`uv run python -m control.can_tool group conservative-test --port <PORT> --duration 0.5`
 
-**Description:** Add synchronized four-motor command execution and feedback aggregation as the runtime control target, while keeping the first physical validation conservative: enable, send zero-safe commands, read feedback, and always disable on exit.
+Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可用、单电机可控、单 DMH6215 小 torque 安全、`group zero` 可用、`group conservative-test` 在保守参数下可安全退出，且未写参数、未设零点、未使用激进参数。
 
-**Acceptance criteria:**
-- [ ] Default first-validation path sends only zero MIT commands to DM4310 and zero velocity commands to DMH6215.
-- [ ] Runtime command path can send one synchronized command set to all four motors and aggregate feedback by Master_ID.
-- [ ] Any nonzero wheel motion requires `--allow-motion` and explicit approval.
-- [ ] Optional first physical motion can still be staged one motor at a time, low speed, short duration.
-- [ ] `disable-all` is sent in cleanup on success, failure, timeout, or interrupt.
-- [ ] Success is based on aggregated Master_ID feedback, state, velocity sign/threshold when moving, temperature, and absence of fault state.
+### Phase 5: 调试 runbook
 
-**Verification:**
-- [ ] Dry-run synchronized four-motor path shows all command frames and final disable for first validation.
-- [ ] Mocked exception test verifies cleanup disable is attempted.
-- [ ] `uv run pytest tests/test_damiao_protocol.py tests/test_damiao_cli.py`
-- [ ] `uv run pytest`
-- [ ] Manual hardware smoke-test only after explicit user approval and physical safety checks; nonzero motion requires approval.
+#### Task 12 — 硬件调试流程与日志模板
 
-**Dependencies:** Tasks 7-9.
+改动目标：`README.md` 或 `control/docs/hardware_bringup.md`。
 
-**Files likely touched:**
-- `/Users/cqc/mojoco_lqr/damiao_can/cli.py`
-- `/Users/cqc/mojoco_lqr/damiao_can/bus.py`
-- `/Users/cqc/mojoco_lqr/tests/test_damiao_cli.py`
+验收标准：
 
-**Estimated scope:** M
+- 写明实机前检查清单。
+- 写明推荐执行顺序：list-ports -> sniff/imu read -> 单电机 enable/disable -> 单 DMH6215 小 torque -> group zero -> group conservative-test。
+- 明确 `group zero` 是零输出，不是设零点。
+- 明确如需提高参数必须人工确认。
+- 提供日志模板：time、port、serial baud、CAN bitrate、command、targets、feedback、abnormal behavior、final safety state。
 
-### Checkpoint: First Hardware Prototype Complete
+验证：
 
-- [ ] Full test suite passes.
-- [ ] Dry-run output reviewed before hardware sends.
-- [ ] Real hardware commands require explicit channel and nonzero motion approval.
-- [ ] Smoke-test always disables on exit.
-- [ ] No motor flash writes occur by default.
+- 按 runbook 从 `list-ports` 到 `group conservative-test` 走一遍并记录日志。
 
-## Verification Matrix
+## Files to create or modify after approval
 
-| Area | Command / Check |
-|---|---|
-| Protocol tests | `uv run pytest tests/test_damiao_protocol.py` |
-| CLI dry-run tests | `uv run pytest tests/test_damiao_cli.py` |
-| Full suite | `uv run pytest` |
-| Dry-run status | `uv run python -m damiao_can.cli --dry-run status` |
-| Dry-run smoke-test | `uv run python -m damiao_can.cli --dry-run smoke-test` |
-| macOS serial discovery | `uv run python -m serial.tools.list_ports -v` |
-| Import check | `uv run python -c "import can; import damiao_can.bus"` |
-| Manual hardware prerequisite | IDs/modes confirmed; verify wiring, 1 Mbps, secured motors, emergency stop |
-| Manual real command order | dry-run → disable-all → staged zero bring-up if needed → synchronized zero command → aggregated feedback check → disable-all |
+- `tasks/plan.md`：保存本计划的执行版。
+- `tasks/todo.md`：保存按阶段和任务拆分的勾选列表。
+- `control/damiao_can/motors.py`：修正设备表。
+- `control/damiao_can/protocol.py`：复用并补齐协议函数。
+- `control/damiao_can/commands.py`：新增命令构建与 group 命令。
+- `control/damiao_can/safety.py`：新增保守限幅策略。
+- `control/bus.py`、`control/fake_bus.py`：新增可测 bus 接口。
+- `control/slcan.py`：Python native backend wrapper。
+- `control/native/slcan_bus.cpp`、`control/native/bindings.cpp`：macOS C++ 串口/CAN backend。
+- `control/can_tool.py`：CLI 主入口。
+- `tests/test_devices.py`、`tests/test_damiao_protocol.py`、`tests/test_safety.py`、`tests/test_fake_bus.py`、`tests/test_group_commands.py`、`tests/test_cli.py`、`tests/test_slcan_codec.py`：离线验证。
+- `README.md` 或 `control/docs/hardware_bringup.md`：实机 runbook。
+- `pyproject.toml`：必要时添加 `pytest`、`pyserial`、`pybind11` 等依赖。
 
-## Risks and Mitigations
-
-| Risk | Impact | Mitigation |
-|---|---:|---|
-| Wrong CAN_ID or Master_ID | High | Hard-code values from SPEC in `motors.py`; test registry and feedback routing. |
-| Treating send ack as feedback | High | Only accept `bus.recv()` messages whose arbitration ID equals configured Master_ID. |
-| Accidental nonzero motion | High | Require `--allow-motion`; clamp to conservative limits. |
-| Smoke-test leaves motor enabled | High | Use cleanup path that always sends `disable-all`; add mocked exception test. |
-| macOS channel mismatch | Medium | Require explicit `--channel`; provide serial listing command. |
-| Unknown exact safe motor ranges | Medium | Centralize limits; clamp commands; do not write motor params without approval. |
-| Flash wear | Medium | Do not expose save-by-default; require explicit confirmation for `0xAA`. |
-
-## Open Questions Before Real Hardware Use
-
-- What is the exact macOS serial channel, e.g. `/dev/tty.usbmodemXXXX`?
-- What conservative phase-1 wheel velocity limit should be used if `--allow-motion` is approved?
-- Should `clear-error` support all-motor only, single-motor only, or both?
-
-Resolved: CAN_ID、Master_ID、控制模式和 1 Mbps 波特率已确认；运行时控制目标为四电机同步控制。
-
-## Repository todo.md Content To Create After Approval
+## Task list content for `tasks/todo.md`
 
 ```markdown
-# Todo: 达妙四电机 USB-CAN 控制器
+# TODO: macOS USB-CAN / 达妙电机调通
 
-- [ ] Save approved plan to `tasks/plan.md` and this checklist to `tasks/todo.md`.
-- [ ] Add `damiao_can` package skeleton and static motor registry.
-- [ ] Implement pure protocol frame packing and feedback decoding.
-- [ ] Add protocol tests for command frames, MIT packing, velocity packing, and feedback decoding.
-- [ ] Implement dry-run CLI status and command previews.
-- [ ] Add dry-run CLI tests and safety-gate tests.
-- [ ] Add `python-can` and `python-can-damiao` dependencies.
-- [ ] Implement CAN bus adapter for macOS `damiao` serial channel.
-- [ ] Implement feedback receive by Master_ID matching.
-- [ ] Wire real enable/disable/clear-error commands.
-- [ ] Wire single-motor MIT and velocity commands with nonzero approval gate for bring-up only.
-- [ ] Implement synchronized four-motor command execution and feedback aggregation.
-- [ ] Implement guarded smoke-test with unconditional disable cleanup.
-- [ ] Verify with `uv run pytest tests/test_damiao_protocol.py tests/test_damiao_cli.py`.
-- [ ] Verify with `uv run pytest`.
-- [ ] Perform manual hardware validation only after explicit approval.
+## Phase 1: Offline Foundation
+
+- [ ] Task 1: 对齐设备表与硬件配置
+  - [ ] 添加/确认 `dm_imu`
+  - [ ] 确认 DM4310 左右为 MIT
+  - [ ] 修正 DMH6215 左右为 torque
+  - [ ] 添加设备表测试
+  - [ ] 运行 `uv run pytest tests/test_devices.py`
+
+- [ ] Task 2: 补齐协议 command builders
+  - [ ] 复用 enable/disable/MIT 编码
+  - [ ] 增加 DMH6215 torque frame
+  - [ ] 增加 group zero frame builder
+  - [ ] 测试 group zero 不产生 `0xFE`
+  - [ ] 运行 `uv run pytest tests/test_damiao_protocol.py`
+
+- [ ] Task 3: 建立安全限幅与 duration 策略
+  - [ ] 实现 torque/duration/MIT 参数校验
+  - [ ] 拒绝 NaN/inf
+  - [ ] 限制 torque-mode 命令目标
+  - [ ] 集中定义 group conservative 参数
+  - [ ] 运行 `uv run pytest tests/test_safety.py`
+
+- [ ] Task 4: 增加 FakeCanBus 与命令执行器
+  - [ ] FakeCanBus 记录发送帧
+  - [ ] 支持 timeout 和注入反馈
+  - [ ] 非零命令 `try/finally` 发送零输出
+  - [ ] fake 跑通 group zero/conservative-test
+  - [ ] 运行 `uv run pytest tests/test_fake_bus.py tests/test_group_commands.py`
+
+- [ ] Checkpoint A: Offline Safety Ready
+  - [ ] `uv run pytest` 通过
+  - [ ] 设备表与 `CLAUDE.md` 一致
+  - [ ] `group zero` 确认不是设零点
+  - [ ] conservative 参数已硬限制
+
+## Phase 2: Local macOS Serial/CAN Backend
+
+- [ ] Task 5: 实现 macOS C++ 串口/CAN backend
+  - [ ] 使用 macOS POSIX/termios
+  - [ ] open/read/write/close 有错误处理和 timeout
+  - [ ] 暴露统一 Python bus 接口
+  - [ ] 确认 USB-CAN 是标准 SLCAN 还是达妙二进制协议
+  - [ ] 运行 `uv run pytest tests/test_slcan_codec.py`
+
+- [ ] Task 6: 实现 list-ports 与 sniff CLI
+  - [ ] `list-ports` 列出 `/dev/cu.*` 和 `/dev/tty.*`
+  - [ ] `sniff` 支持 port/serial-baud/can-bitrate/duration
+  - [ ] 不存在串口时错误清楚
+  - [ ] 运行 `uv run pytest tests/test_cli.py`
+
+- [ ] Checkpoint B: Local Serial Ready
+  - [ ] 找到 USB-CAN 串口
+  - [ ] nonexistent port 不 hang
+  - [ ] 确认真实串口协议
+  - [ ] 未发送任何非零电机输出
+
+## Phase 3: Single Device Hardware Slice
+
+- [ ] Task 7: 单电机 enable/disable
+  - [ ] fake bus 验证 frame
+  - [ ] 实机单电机 enable 后立即 disable
+  - [ ] 记录反馈或 timeout
+
+- [ ] Task 8: 单个 DMH6215 保守 torque 测试
+  - [ ] 只允许 `dmh6215_left/right`
+  - [ ] 默认 torque 建议 `0.02 N·m`，不超过 `0.05 N·m`
+  - [ ] duration 不超过 `0.5 s`
+  - [ ] 异常路径发送零输出
+  - [ ] 实机先跑 `--torque 0.02 --duration 0.3`
+
+- [ ] Task 9: IMU raw read
+  - [ ] duration 到时退出
+  - [ ] 打印 raw CAN frame
+  - [ ] 不发送电机控制帧
+
+- [ ] Checkpoint C: Single Device Hardware Ready
+  - [ ] sniff 稳定
+  - [ ] enable/disable 可用
+  - [ ] 单 DMH6215 小 torque 安全退出
+  - [ ] IMU read 能运行到 duration 结束
+
+## Phase 4: Four-Motor Vertical Slice
+
+- [ ] Task 10: group zero
+  - [ ] 固定顺序发送 4 台电机零输出
+  - [ ] 不使用 `0xFE`
+  - [ ] 不发送参数写入/保存
+  - [ ] fake 和实机均验证
+
+- [ ] Checkpoint D: Group Zero Passed
+  - [ ] 电机处于安全支撑状态
+  - [ ] 急停或断电手段可用
+  - [ ] group zero 无异常动作
+  - [ ] 已记录 port、baud、bitrate、反馈情况
+
+- [ ] Task 11: group conservative-test
+  - [ ] 内置 pre-zero
+  - [ ] 默认 duration 不超过 `0.5 s`
+  - [ ] DM4310 不默认拉绝对 0 位
+  - [ ] DMH6215 不超过 torque 上限
+  - [ ] 结束/异常都发送 group zero
+  - [ ] 不自动提高参数
+
+- [ ] Checkpoint E: Four-Motor Conservative Slice Passed
+  - [ ] 4 台电机同 batch 发送命令
+  - [ ] 测试安全退出
+  - [ ] 未写参数、未设零点、未使用激进参数
+
+## Phase 5: Documentation and Runbook
+
+- [ ] Task 12: 补充硬件调试 runbook 与日志模板
+  - [ ] 写明执行顺序
+  - [ ] 写明 `group zero` 不是设零点
+  - [ ] 写明提高参数需要人工确认
+  - [ ] 提供测试日志模板
 ```
+
+## End-to-end verification
+
+无硬件：
+
+```bash
+uv run pytest
+uv run python -m control.can_tool group zero --backend fake --duration 0.1
+uv run python -m control.can_tool group conservative-test --backend fake --duration 0.1
+uv run python -m control.can_tool imu read --backend fake --duration 0.1
+```
+
+本机串口：
+
+```bash
+uv run python -m control.can_tool list-ports
+uv run python -m control.can_tool sniff --port /dev/nonexistent --duration 0.2
+```
+
+实机顺序：
+
+```bash
+uv run python -m control.can_tool sniff --port <PORT> --duration 5.0
+uv run python -m control.can_tool imu read --port <PORT> --duration 5.0
+uv run python -m control.can_tool motor enable --port <PORT> --motor dm4310_left
+uv run python -m control.can_tool motor disable --port <PORT> --motor dm4310_left
+uv run python -m control.can_tool motor torque --port <PORT> --motor dmh6215_left --torque 0.02 --duration 0.3
+uv run python -m control.can_tool group zero --port <PORT> --duration 1.0
+uv run python -m control.can_tool group conservative-test --port <PORT> --duration 0.5
+```
+
+## Risks
+
+- USB-CAN 可能不是标准 ASCII SLCAN，而是达妙二进制串口协议；先用 backend codec checkpoint 确认。
+- 现有 C++ 示例可能 Linux-only；macOS 需用 POSIX/termios 重新实现。
+- DMH6215 当前代码模式与硬件配置不一致；必须先修正并测试。
+- `group zero` 容易误解为设零点；必须测试禁止 `0xFE`。
+- DM4310 若用绝对 0 位 + kp 可能意外动作；conservative-test 默认不这样做。
+- 参数太保守可能看不见动作；第一目标是通信与同周期命令，不是明显运动。

@@ -1,18 +1,118 @@
-# Todo: 达妙四电机 USB-CAN 控制器
+# TODO: macOS USB-CAN / 达妙电机调通
 
-- [x] Save approved plan to `tasks/plan.md` and this checklist to `tasks/todo.md`.
-- [x] Add `damiao_can` package skeleton and static motor registry.
-- [x] Implement pure protocol frame packing and feedback decoding.
-- [x] Add protocol tests for command frames, MIT packing, velocity packing, and feedback decoding.
-- [ ] Implement dry-run CLI status and command previews.
-- [ ] Add dry-run CLI tests and safety-gate tests.
-- [ ] Add `python-can` and `python-can-damiao` dependencies.
-- [ ] Implement CAN bus adapter for macOS `damiao` serial channel.
-- [ ] Implement feedback receive by Master_ID matching.
-- [ ] Wire real enable/disable/clear-error commands.
-- [ ] Wire single-motor MIT and velocity commands with nonzero approval gate for bring-up only.
-- [ ] Implement synchronized four-motor command execution and feedback aggregation.
-- [ ] Implement guarded smoke-test with unconditional disable cleanup.
-- [ ] Verify with `uv run pytest tests/test_damiao_protocol.py tests/test_damiao_cli.py`.
-- [ ] Verify with `uv run pytest`.
-- [ ] Perform manual hardware validation only after explicit approval.
+## Phase 1: Offline Foundation
+
+- [x] Task 1: 对齐设备表与硬件配置
+  - [x] 添加/确认 `dm_imu`
+  - [x] 确认 DM4310 左右为 MIT
+  - [x] 修正 DMH6215 左右为 torque
+  - [x] 添加设备表测试
+  - [x] 运行 `uv run pytest tests/test_devices.py`
+
+- [ ] Task 2: 补齐协议 command builders
+  - [ ] 复用 enable/disable/MIT 编码
+  - [ ] 增加 DMH6215 torque frame
+  - [ ] 增加 group zero frame builder
+  - [ ] 测试 group zero 不产生 `0xFE`
+  - [ ] 运行 `uv run pytest tests/test_damiao_protocol.py`
+
+- [ ] Task 3: 建立安全限幅与 duration 策略
+  - [ ] 实现 torque/duration/MIT 参数校验
+  - [ ] 拒绝 NaN/inf
+  - [ ] 限制 torque-mode 命令目标
+  - [ ] 集中定义 group conservative 参数
+  - [ ] 运行 `uv run pytest tests/test_safety.py`
+
+- [ ] Task 4: 增加 FakeCanBus 与命令执行器
+  - [ ] FakeCanBus 记录发送帧
+  - [ ] 支持 timeout 和注入反馈
+  - [ ] 非零命令 `try/finally` 发送零输出
+  - [ ] fake 跑通 group zero/conservative-test
+  - [ ] 运行 `uv run pytest tests/test_fake_bus.py tests/test_group_commands.py`
+
+- [ ] Checkpoint A: Offline Safety Ready
+  - [ ] `uv run pytest` 通过
+  - [ ] 设备表与 `CLAUDE.md` 一致
+  - [ ] `group zero` 确认不是设零点
+  - [ ] conservative 参数已硬限制
+
+## Phase 2: Local macOS Serial/CAN Backend
+
+- [ ] Task 5: 实现 macOS C++ 串口/CAN backend
+  - [ ] 使用 macOS POSIX/termios
+  - [ ] open/read/write/close 有错误处理和 timeout
+  - [ ] 暴露统一 Python bus 接口
+  - [ ] 确认 USB-CAN 是标准 SLCAN 还是达妙二进制协议
+  - [ ] 运行 `uv run pytest tests/test_slcan_codec.py`
+
+- [ ] Task 6: 实现 list-ports 与 sniff CLI
+  - [ ] `list-ports` 列出 `/dev/cu.*` 和 `/dev/tty.*`
+  - [ ] `sniff` 支持 port/serial-baud/can-bitrate/duration
+  - [ ] 不存在串口时错误清楚
+  - [ ] 运行 `uv run pytest tests/test_cli.py`
+
+- [ ] Checkpoint B: Local Serial Ready
+  - [ ] 找到 USB-CAN 串口
+  - [ ] nonexistent port 不 hang
+  - [ ] 确认真实串口协议
+  - [ ] 未发送任何非零电机输出
+
+## Phase 3: Single Device Hardware Slice
+
+- [ ] Task 7: 单电机 enable/disable
+  - [ ] fake bus 验证 frame
+  - [ ] 实机单电机 enable 后立即 disable
+  - [ ] 记录反馈或 timeout
+
+- [ ] Task 8: 单个 DMH6215 保守 torque 测试
+  - [ ] 只允许 `dmh6215_left/right`
+  - [ ] 默认 torque 建议 `0.02 N·m`，不超过 `0.05 N·m`
+  - [ ] duration 不超过 `0.5 s`
+  - [ ] 异常路径发送零输出
+  - [ ] 实机先跑 `--torque 0.02 --duration 0.3`
+
+- [ ] Task 9: IMU raw read
+  - [ ] duration 到时退出
+  - [ ] 打印 raw CAN frame
+  - [ ] 不发送电机控制帧
+
+- [ ] Checkpoint C: Single Device Hardware Ready
+  - [ ] sniff 稳定
+  - [ ] enable/disable 可用
+  - [ ] 单 DMH6215 小 torque 安全退出
+  - [ ] IMU read 能运行到 duration 结束
+
+## Phase 4: Four-Motor Vertical Slice
+
+- [ ] Task 10: group zero
+  - [ ] 固定顺序发送 4 台电机零输出
+  - [ ] 不使用 `0xFE`
+  - [ ] 不发送参数写入/保存
+  - [ ] fake 和实机均验证
+
+- [ ] Checkpoint D: Group Zero Passed
+  - [ ] 电机处于安全支撑状态
+  - [ ] 急停或断电手段可用
+  - [ ] group zero 无异常动作
+  - [ ] 已记录 port、baud、bitrate、反馈情况
+
+- [ ] Task 11: group conservative-test
+  - [ ] 内置 pre-zero
+  - [ ] 默认 duration 不超过 `0.5 s`
+  - [ ] DM4310 不默认拉绝对 0 位
+  - [ ] DMH6215 不超过 torque 上限
+  - [ ] 结束/异常都发送 group zero
+  - [ ] 不自动提高参数
+
+- [ ] Checkpoint E: Four-Motor Conservative Slice Passed
+  - [ ] 4 台电机同 batch 发送命令
+  - [ ] 测试安全退出
+  - [ ] 未写参数、未设零点、未使用激进参数
+
+## Phase 5: Documentation and Runbook
+
+- [ ] Task 12: 补充硬件调试 runbook 与日志模板
+  - [ ] 写明执行顺序
+  - [ ] 写明 `group zero` 不是设零点
+  - [ ] 写明提高参数需要人工确认
+  - [ ] 提供测试日志模板
