@@ -1,0 +1,12 @@
+{
+  "include": ["control", "tests"],
+  "exclude": ["control/dm-tools", "control/motor-control-routine"],
+  "extraPaths": ["."],
+  "venvPath": ".",
+  "venv": ".venv",
+  "executionEnvironments": [
+    {
+      "root": "."
+    }
+  ]
+}

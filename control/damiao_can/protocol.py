@@ -4,7 +4,7 @@ import math
 import struct
 from dataclasses import dataclass
 
-from control.damiao_can.motors import MotorConfig, get_motor_by_master_id
+from .motors import MotorConfig, get_motor_by_master_id
 
 
 @dataclass(frozen=True)
@@ -102,6 +102,14 @@ def velocity_frame(motor: MotorConfig, *, velocity: float = 0.0) -> CanFrame:
     if not -motor.v_max <= velocity <= motor.v_max:
         raise ValueError(f"velocity command must be within [{-motor.v_max}, {motor.v_max}]")
     return CanFrame(0x200 + motor.can_id, struct.pack("<f", velocity) + b"\x00\x00\x00\x00")
+
+
+def torque_frame(motor: MotorConfig, torque: float = 0.0) -> CanFrame:
+    if not math.isfinite(torque):
+        raise ValueError("torque command must be finite")
+    if not -motor.t_max <= torque <= motor.t_max:
+        raise ValueError(f"torque command must be within [{-motor.t_max}, {motor.t_max}]")
+    return CanFrame(0x600 + motor.can_id, struct.pack("<f", torque) + b"\x00\x00\x00\x00")
 
 
 def decode_feedback_frame(frame: CanFrame) -> RoutedFeedback:

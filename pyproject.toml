@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "mujoco>=3.7.0",
+    "pyserial>=3.5",
 ]
 
 [dependency-groups]
@@ -15,3 +16,10 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.pyright]
+include = ["control", "tests"]
+exclude = ["control/dm-tools", "control/motor-control-routine"]
+extraPaths = ["."]
+venvPath = "."
+venv = ".venv"

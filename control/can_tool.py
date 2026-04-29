@@ -1,0 +1,240 @@
+from __future__ import annotations
+
+import argparse
+import importlib
+import math
+import sys
+import time
+
+MAX_ENABLE_DURATION = 0.5
+DEFAULT_ENABLE_DURATION = 0.1
+
+
+def _commands_module():
+    return importlib.import_module("control.damiao_can.commands")
+
+
+def _motors_module():
+    return importlib.import_module("control.damiao_can.motors")
+
+
+def _safety_module():
+    return importlib.import_module("control.damiao_can.safety")
+
+
+def _fake_bus_class():
+    return importlib.import_module("control.fake_bus").FakeCanBus
+
+
+def _slcan_module():
+    return importlib.import_module("control.slcan")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    normalized_argv = _normalize_legacy_motor_args(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(normalized_argv)
+    try:
+        return _run(args)
+    except Exception as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+
+def _normalize_legacy_motor_args(argv: list[str]) -> list[str]:
+    try:
+        motor_index = argv.index("motor")
+    except ValueError:
+        return argv
+    if motor_index + 1 >= len(argv):
+        return argv
+    bus_arg_names = {"--backend", "--port", "--serial-baud", "--can-bitrate"}
+    index = motor_index + 1
+    while index < len(argv) and argv[index] in bus_arg_names:
+        index += 2
+    if index + 1 >= len(argv):
+        return argv
+    if argv[index] in {"enable", "disable", "torque"}:
+        return argv
+    if argv[index + 1] not in {"enable", "disable", "torque"}:
+        return argv
+    return [*argv[:index], argv[index + 1], "--motor", argv[index], *argv[index + 2 :]]
+
+
+def _run(args: argparse.Namespace) -> int:
+    commands = _commands_module()
+    motors = _motors_module()
+    safety = _safety_module()
+
+    if args.command == "list-ports":
+        for port in _slcan_module().list_serial_ports():
+            print(port)
+        return 0
+
+    if not hasattr(args, "backend"):
+        args.backend = "slcan"
+    if not hasattr(args, "port"):
+        args.port = None
+    if not hasattr(args, "serial_baud"):
+        args.serial_baud = 115200
+    if not hasattr(args, "can_bitrate"):
+        args.can_bitrate = 1000000
+
+    bus = _make_bus(args)
+    try:
+        if args.command == "sniff":
+            _print_bus_config(args)
+            deadline = time.monotonic() + args.duration
+            while time.monotonic() < deadline:
+                received = bus.recv(timeout=min(safety.DEFAULT_PERIOD, max(0.0, deadline - time.monotonic())))
+                if received is not None:
+                    print(_format_received_frame(received))
+            return 0
+
+        if args.command == "imu" and args.imu_command == "read":
+            imu = motors.get_device("dm_imu")
+            print(f"imu {imu.name}: CAN=0x{imu.can_id:02X} MST=0x{imu.master_id:02X} mode={imu.mode}")
+            deadline = time.monotonic() + args.duration
+            while time.monotonic() < deadline:
+                received = bus.recv(timeout=min(safety.DEFAULT_PERIOD, max(0.0, deadline - time.monotonic())))
+                if received is not None:
+                    print(_format_received_frame(received))
+            return 0
+
+        if args.command == "group":
+            print(f"group: duration={args.duration} period={args.period} max_test_torque={safety.MAX_TEST_TORQUE}")
+            for frame in commands.group_zero_frames():
+                print(f"target CAN=0x{frame.arbitration_id:03X}")
+            for name in ("dm4310_left", "dm4310_right", "dmh6215_left", "dmh6215_right"):
+                motor = motors.get_motor(name)
+                print(f"motor {motor.name}: CAN=0x{motor.can_id:02X} MST=0x{motor.master_id:02X} mode={motor.mode}")
+            if args.group_command == "zero":
+                print("group zero sends zero output frames only; it does not set zero position")
+                commands.run_group_zero(bus, duration=args.duration, period=args.period)
+                return 0
+            if args.group_command == "conservative-test":
+                print(f"conservative torque={args.torque} max_duration={safety.MAX_NONZERO_DURATION}")
+                commands.run_group_conservative_test(bus, torque=args.torque, duration=args.duration, period=args.period)
+                return 0
+
+        if args.command == "motor":
+            motor = motors.get_motor(args.motor)
+            print(f"motor {motor.name}: CAN=0x{motor.can_id:02X} MST=0x{motor.master_id:02X} mode={motor.mode}")
+            if args.motor_command == "enable":
+                duration = _validate_enable_duration(args.duration)
+                print(f"enable smoke test: sending enable for {duration:.3f}s, then disable")
+                bus.send(commands.single_motor_command_frame(args.motor, "enable"))
+                time.sleep(duration)
+                bus.send(commands.single_motor_command_frame(args.motor, "disable"))
+                return 0
+            if args.motor_command == "disable":
+                bus.send(commands.single_motor_command_frame(args.motor, "disable"))
+                return 0
+            if args.motor_command == "torque":
+                print(f"torque={args.torque} max_test_torque={safety.MAX_TEST_TORQUE} duration={args.duration}")
+                commands.run_torque_test(bus, args.motor, torque=args.torque, duration=args.duration, period=args.period)
+                return 0
+
+        raise ValueError("unsupported command")
+    finally:
+        bus.close()
+
+
+def _make_bus(args: argparse.Namespace):
+    backend = getattr(args, "backend", "slcan")
+    if backend == "fake":
+        return _fake_bus_class()()
+    if backend == "slcan":
+        port = getattr(args, "port", None)
+        if not port:
+            raise ValueError("--port is required for slcan backend")
+        return _slcan_module().SlcanBus(port, serial_baud=args.serial_baud, can_bitrate=args.can_bitrate)
+    raise ValueError(f"unsupported backend: {backend}")
+
+
+def _validate_enable_duration(duration: float) -> float:
+    if not math.isfinite(duration):
+        raise ValueError("enable duration must be finite")
+    if not 0.0 <= duration <= MAX_ENABLE_DURATION:
+        raise ValueError(f"enable duration must be within [0.0, {MAX_ENABLE_DURATION}]")
+    return duration
+
+
+def _print_bus_config(args: argparse.Namespace) -> None:
+    print(
+        f"config backend={args.backend} port={args.port or '-'} "
+        f"serial_baud={args.serial_baud} can_bitrate={args.can_bitrate}"
+    )
+
+
+def _format_received_frame(received) -> str:
+    frame = received.frame
+    timestamp = received.timestamp if received.timestamp is not None else time.monotonic()
+    return f"rx timestamp={timestamp:.6f} id=0x{frame.arbitration_id:03X} dlc={len(frame.data)} data={frame.data.hex()}"
+
+
+def _add_bus_args(parser: argparse.ArgumentParser, *, defaults: bool = True) -> None:
+    default_backend = "slcan" if defaults else argparse.SUPPRESS
+    default_port = None if defaults else argparse.SUPPRESS
+    default_serial_baud = 115200 if defaults else argparse.SUPPRESS
+    default_can_bitrate = 1000000 if defaults else argparse.SUPPRESS
+    parser.add_argument("--backend", choices=["fake", "slcan"], default=default_backend)
+    parser.add_argument("--port", default=default_port)
+    parser.add_argument("--serial-baud", type=int, default=default_serial_baud)
+    parser.add_argument("--can-bitrate", type=int, default=default_can_bitrate)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    safety = _safety_module()
+    parser = argparse.ArgumentParser(prog="can_tool")
+    _add_bus_args(parser)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("list-ports")
+
+    sniff = sub.add_parser("sniff")
+    _add_bus_args(sniff, defaults=False)
+    sniff.add_argument("--duration", type=float, default=1.0)
+
+    motor = sub.add_parser("motor")
+    _add_bus_args(motor, defaults=False)
+    motor_sub = motor.add_subparsers(dest="motor_command", required=True)
+    enable = motor_sub.add_parser("enable")
+    _add_bus_args(enable, defaults=False)
+    enable.add_argument("--motor", required=True)
+    enable.add_argument("--duration", type=float, default=DEFAULT_ENABLE_DURATION)
+    disable = motor_sub.add_parser("disable")
+    _add_bus_args(disable, defaults=False)
+    disable.add_argument("--motor", required=True)
+    torque = motor_sub.add_parser("torque")
+    _add_bus_args(torque, defaults=False)
+    torque.add_argument("--motor", required=True)
+    torque.add_argument("--torque", type=float, default=safety.DEFAULT_TEST_TORQUE)
+    torque.add_argument("--duration", type=float, default=0.3)
+    torque.add_argument("--period", type=float, default=safety.DEFAULT_PERIOD)
+
+    group = sub.add_parser("group")
+    _add_bus_args(group, defaults=False)
+    group_sub = group.add_subparsers(dest="group_command", required=True)
+    zero = group_sub.add_parser("zero")
+    _add_bus_args(zero, defaults=False)
+    zero.add_argument("--duration", type=float, default=1.0)
+    zero.add_argument("--period", type=float, default=safety.DEFAULT_PERIOD)
+    conservative = group_sub.add_parser("conservative-test")
+    _add_bus_args(conservative, defaults=False)
+    conservative.add_argument("--torque", type=float, default=safety.DEFAULT_TEST_TORQUE)
+    conservative.add_argument("--duration", type=float, default=0.3)
+    conservative.add_argument("--period", type=float, default=safety.DEFAULT_PERIOD)
+
+    imu = sub.add_parser("imu")
+    _add_bus_args(imu, defaults=False)
+    imu_sub = imu.add_subparsers(dest="imu_command", required=True)
+    read = imu_sub.add_parser("read")
+    _add_bus_args(read, defaults=False)
+    read.add_argument("--duration", type=float, default=1.0)
+
+    return parser
+
+
+if __name__ == "__main__":
+    sys.exit(main())
