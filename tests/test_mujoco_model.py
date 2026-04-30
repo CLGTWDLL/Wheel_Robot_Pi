@@ -1,4 +1,5 @@
 from pathlib import Path
+from xml.etree import ElementTree
 
 import numpy as np
 import mujoco
@@ -8,11 +9,23 @@ from sim.model_xml import prepare_controlled_mujoco_xml
 
 
 XML_PATH = Path(__file__).resolve().parents[1] / "sim" / "轮腿v1" / "轮腿v1.xml"
+MAX_TRACKED_MESH_BYTES = 10 * 1024 * 1024
 
 
 def _controlled_model(tmp_path):
     controlled_xml = prepare_controlled_mujoco_xml(XML_PATH, cache_dir=tmp_path)
     return controlled_xml, mujoco.MjModel.from_xml_path(str(controlled_xml))
+
+
+def test_mujoco_xml_references_packaged_mesh_assets():
+    xml_root = ElementTree.parse(XML_PATH).getroot()
+
+    for mesh in xml_root.findall("./asset/mesh"):
+        mesh_file = XML_PATH.parent / mesh.attrib["file"]
+        assert mesh_file.is_file(), f"missing mesh asset: {mesh_file}"
+        assert mesh_file.stat().st_size < MAX_TRACKED_MESH_BYTES, (
+            f"mesh asset exceeds packaging size limit: {mesh_file}"
+        )
 
 
 def test_prepare_controlled_mujoco_xml_does_not_overwrite_source(tmp_path):
