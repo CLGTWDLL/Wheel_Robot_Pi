@@ -79,6 +79,7 @@ def test_controlled_viewer_loop_steps_while_holding_viewer_lock(monkeypatch):
             events.append("lock_enter")
 
         def __exit__(self, exc_type, exc, traceback):
+            del exc_type, exc, traceback
             events.append("lock_exit")
 
     class FakeViewer:
@@ -105,7 +106,11 @@ def test_controlled_viewer_loop_steps_while_holding_viewer_lock(monkeypatch):
         "sim.launch_mujoco.step_controlled_model", fake_step_controlled_model
     )
 
-    run_controlled_viewer_loop(object(), object(), lambda model, data, state: None, FakeViewer())
+    def unused_controller(model, data, state):
+        del model, data, state
+        return None
+
+    run_controlled_viewer_loop(object(), object(), unused_controller, FakeViewer())
 
     assert events == ["lock_enter", "step", "lock_exit", "sync"]
 
