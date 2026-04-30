@@ -24,8 +24,6 @@ def ensure_dependencies() -> None:
     missing_packages: list[str] = []
     for module_name, package_name in (
         ("mujoco", "mujoco"),
-        ("trimesh", "trimesh"),
-        ("fast_simplification", "fast-simplification"),
     ):
         try:
             __import__(module_name)
@@ -144,6 +142,20 @@ def step_controlled_model(model: object, data: object, controller: Controller) -
     return bool(np.all(np.isfinite(data.qpos)) and np.all(np.isfinite(data.qvel)))
 
 
+def run_controlled_viewer_loop(
+    model: object,
+    data: object,
+    controller: Controller,
+    viewer: object,
+) -> None:
+    while viewer.is_running():
+        with viewer.lock():
+            finite = step_controlled_model(model, data, controller)
+        if not finite:
+            break
+        viewer.sync()
+
+
 def main() -> None:
     ensure_dependencies()
     args = parse_args()
@@ -164,10 +176,7 @@ def main() -> None:
     model, data = build_controlled_model(args.xml, cache_dir=args.cache_dir)
     controller = create_controlled_controller(args.controller, args.scenario)
     with mujoco.viewer.launch_passive(model, data) as viewer:
-        while viewer.is_running():
-            if not step_controlled_model(model, data, controller):
-                break
-            viewer.sync()
+        run_controlled_viewer_loop(model, data, controller, viewer)
 
 
 if __name__ == "__main__":
