@@ -42,6 +42,7 @@ def test_step_controlled_model_clips_ctrl_steps_and_returns_finite(tmp_path):
     requested = np.full(model.nu, 10.0)
 
     def controller(model, data, state):
+        del model, data
         assert state.base_position.shape == (3,)
         return requested
 
