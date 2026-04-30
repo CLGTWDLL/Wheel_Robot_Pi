@@ -8,7 +8,7 @@ from sim.model_semantics import MODEL_SEMANTICS
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
 
 
-ROOT_QPOS = "0 0 0.31 0 1 0 0"
+ROOT_QPOS = "0 0 0.06978 0 1 0 0"
 CONTROL_RANGE = "-0.5 0.5"
 
 
@@ -32,6 +32,7 @@ def prepare_controlled_mujoco_xml(xml_path: Path, cache_dir: Path | None = None)
     _make_mesh_paths_absolute(root, prepared_xml.parent)
     _ensure_root_freejoint(root)
     _mark_mesh_geoms_visual_only(root)
+    _add_wheel_collision_proxies(root)
     _replace_actuators(root)
     _expand_keyframes(root)
 
@@ -76,6 +77,33 @@ def _mark_mesh_geoms_visual_only(root: ET.Element) -> None:
             geom.set("contype", "0")
             geom.set("conaffinity", "0")
             geom.set("group", "1")
+
+
+def _add_wheel_collision_proxies(root: ET.Element) -> None:
+    for body_name in ("robot_wheel_left", "robot_wheel_right"):
+        body = root.find(f".//body[@name='{body_name}']")
+        if body is None:
+            raise ValueError(f"MuJoCo XML is missing wheel body: {body_name}")
+        proxy_name = f"{body_name}_collision"
+        if body.find(f"geom[@name='{proxy_name}']") is not None:
+            continue
+        inertial = body.find("inertial")
+        inertial_pos = inertial.get("pos") if inertial is not None else None
+        proxy_pos = inertial_pos if inertial_pos is not None else "0 0 0"
+        ET.SubElement(
+            body,
+            "geom",
+            {
+                "name": proxy_name,
+                "type": "sphere",
+                "size": "0.045",
+                "pos": proxy_pos,
+                "group": "3",
+                "contype": "1",
+                "conaffinity": "1",
+                "friction": "1.0 0.02 0.001",
+            },
+        )
 
 
 def _replace_actuators(root: ET.Element) -> None:

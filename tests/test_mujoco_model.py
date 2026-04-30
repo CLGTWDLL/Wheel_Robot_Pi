@@ -76,3 +76,34 @@ def test_controlled_model_marks_stl_mesh_geoms_visual_only(tmp_path):
         if model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_MESH:
             assert model.geom_contype[geom_id] == 0
             assert model.geom_conaffinity[geom_id] == 0
+
+
+def test_controlled_model_adds_wheel_collision_proxies(tmp_path):
+    _, model = _controlled_model(tmp_path)
+
+    proxy_names = {"robot_wheel_left_collision", "robot_wheel_right_collision"}
+    for proxy_name in proxy_names:
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, proxy_name)
+        assert geom_id != -1
+        assert model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_SPHERE
+        assert model.geom_contype[geom_id] != 0
+        assert model.geom_conaffinity[geom_id] != 0
+        body_name = proxy_name.removesuffix("_collision")
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        assert np.allclose(model.geom_pos[geom_id], model.body_ipos[body_id], atol=1e-9)
+
+
+def test_controlled_home_keyframe_places_wheel_proxies_on_ground(tmp_path):
+    _, model = _controlled_model(tmp_path)
+    data = mujoco.MjData(model)
+    key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "link23_connected_home")
+    mujoco.mj_resetDataKeyframe(model, data, key_id)
+    mujoco.mj_forward(model, data)
+
+    wheel_bottoms = []
+    for proxy_name in ("robot_wheel_left_collision", "robot_wheel_right_collision"):
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, proxy_name)
+        wheel_bottoms.append(data.geom_xpos[geom_id, 2] - model.geom_size[geom_id, 0])
+
+    assert min(wheel_bottoms) == np.asarray(wheel_bottoms).min()
+    assert abs(min(wheel_bottoms)) < 1e-3
