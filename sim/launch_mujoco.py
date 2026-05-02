@@ -7,8 +7,12 @@ import os
 import sys
 from pathlib import Path
 
+# 确保项目根目录在 sys.path 中，使 sim 包可被正确导入
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 
+from sim.controllers.combined import CombinedController, CombinedParams
 from sim.controllers.phase import JumpPhaseMachine, JumpPhaseParams
 from sim.controllers.vmc import VmcController, VmcParams
 from sim.model_xml import prepare_controlled_mujoco_xml
@@ -67,13 +71,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         choices=("viewer", "controlled"),
-        default="viewer",
+        default="controlled",
         help="Launch the original viewer-only model or the controlled viewer loop.",
     )
     parser.add_argument(
         "--controller",
-        choices=("zero", "vmc"),
-        default="zero",
+        choices=("zero", "vmc", "lqr_vmc"),
+        default="lqr_vmc",
         help="Controller to use in controlled mode.",
     )
     parser.add_argument(
@@ -110,8 +114,6 @@ def build_controlled_model(xml_path: Path, cache_dir: Path | None = None) -> tup
 def create_controlled_controller(controller_name: str, scenario: str) -> Controller:
     if controller_name == "zero":
         return zero_controller
-    if controller_name != "vmc":
-        raise ValueError(f"unsupported controller: {controller_name}")
 
     phase_machine = None
     if scenario == "jump":
@@ -120,10 +122,19 @@ def create_controlled_controller(controller_name: str, scenario: str) -> Control
     elif scenario != "stand":
         raise ValueError(f"unsupported scenario: {scenario}")
 
-    return VmcController(
-        VmcParams(nominal_height=0.06978, kp_height=1.0, kd_height=0.2),
-        phase_machine=phase_machine,
-    )
+    vmc_params = VmcParams(nominal_height=0.06078, kp_height=1.0, kd_height=0.2)
+    if controller_name == "vmc":
+        return VmcController(vmc_params, phase_machine=phase_machine)
+    if controller_name == "lqr_vmc":
+        return CombinedController(
+            CombinedParams(
+                vmc=vmc_params,
+                q_diag=np.array([100.0, 10.0, 1.0, 1.0]),
+                r_diag=np.array([1.0, 1.0]),
+            ),
+            phase_machine=phase_machine,
+        )
+    raise ValueError(f"unsupported controller: {controller_name}")
 
 
 def step_controlled_model(model: object, data: object, controller: Controller) -> bool:

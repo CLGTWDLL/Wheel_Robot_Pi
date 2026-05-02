@@ -3,6 +3,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from sim.controllers.combined import CombinedController
 from sim.controllers.phase import JumpPhase
 from sim.launch_mujoco import (
     HOME_KEYFRAME,
@@ -23,7 +24,7 @@ def test_parse_args_defaults_use_controlled_zero_controller():
     args = parse_args([])
 
     assert args.mode == "controlled"
-    assert args.controller == "zero"
+    assert args.controller == "lqr_vmc"
     assert args.scenario == "stand"
     assert args.xml == XML_PATH
     assert args.cache_dir is None
@@ -122,3 +123,17 @@ def test_create_controlled_controller_supports_zero_and_jump_vmc():
 
     assert controller.phase_machine is not None
     assert controller.phase_machine.phase == JumpPhase.CROUCH
+
+
+def test_create_controlled_controller_supports_lqr_vmc():
+    controller = create_controlled_controller(controller_name="lqr_vmc", scenario="stand")
+
+    assert isinstance(controller, CombinedController)
+
+
+def test_create_controlled_controller_starts_lqr_vmc_jump_phase():
+    controller = create_controlled_controller(controller_name="lqr_vmc", scenario="jump")
+
+    assert isinstance(controller, CombinedController)
+    assert controller.vmc_controller.phase_machine is not None
+    assert controller.vmc_controller.phase_machine.phase == JumpPhase.CROUCH
