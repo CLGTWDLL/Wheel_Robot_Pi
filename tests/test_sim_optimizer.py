@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from sim.controllers.combined import CombinedParams
 from sim.optimize import OptimizationConfig, main, optimize_parameters, score_metrics
 from sim.metrics import RolloutMetrics
 
@@ -46,8 +47,11 @@ def test_optimize_parameters_runs_bounded_trials(tmp_path):
 
     assert len(result.trials) == 3
     assert result.best_trial in result.trials
-    assert result.best_trial.params.nominal_height >= 0.05
-    assert result.best_trial.params.nominal_height <= 0.09
+    assert isinstance(result.best_trial.params, CombinedParams)
+    assert result.best_trial.params.vmc.nominal_height >= 0.05
+    assert result.best_trial.params.vmc.nominal_height <= 0.09
+    assert result.best_trial.params.q_diag.shape == (4,)
+    assert result.best_trial.params.r_diag.shape == (2,)
 
 
 def test_optimize_parameters_is_repeatable_with_seed(tmp_path):
@@ -56,7 +60,11 @@ def test_optimize_parameters_is_repeatable_with_seed(tmp_path):
     first = optimize_parameters(XML_PATH, config)
     second = optimize_parameters(XML_PATH, config)
 
-    assert [trial.params for trial in first.trials] == [trial.params for trial in second.trials]
+    for first_trial, second_trial in zip(first.trials, second.trials, strict=True):
+        assert first_trial.params.vmc == second_trial.params.vmc
+        assert first_trial.params.target_velocity == second_trial.params.target_velocity
+        assert (first_trial.params.q_diag == second_trial.params.q_diag).all()
+        assert (first_trial.params.r_diag == second_trial.params.r_diag).all()
     assert [trial.score for trial in first.trials] == [trial.score for trial in second.trials]
 
 

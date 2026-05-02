@@ -5,8 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 import random
 
+import numpy as np
+
+from sim.controllers.combined import CombinedController, CombinedParams
 from sim.controllers.phase import JumpPhaseMachine, JumpPhaseParams
-from sim.controllers.vmc import VmcController, VmcParams
+from sim.controllers.vmc import VmcParams
 from sim.metrics import RolloutMetrics
 from sim.rollout import RolloutConfig, run_rollout
 
@@ -22,7 +25,7 @@ class OptimizationConfig:
 
 @dataclass(frozen=True)
 class OptimizationTrial:
-    params: VmcParams
+    params: CombinedParams
     score: float
     metrics: RolloutMetrics
     failure_reason: str | None
@@ -54,10 +57,10 @@ def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> Optimizat
     rng = random.Random(config.seed)
     trials: list[OptimizationTrial] = []
     for _ in range(config.trials):
-        params = _sample_vmc_params(rng)
+        params = _sample_combined_params(rng)
         machine = JumpPhaseMachine(_sample_phase_params(rng))
         machine.start_jump()
-        controller = VmcController(params, phase_machine=machine)
+        controller = CombinedController(params, phase_machine=machine)
         try:
             rollout = run_rollout(
                 xml_path,
@@ -87,14 +90,25 @@ def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> Optimizat
     return OptimizationResult(trials=tuple(trials), best_trial=best_trial)
 
 
-def _sample_vmc_params(rng: random.Random) -> VmcParams:
-    return VmcParams(
-        nominal_height=rng.uniform(0.05, 0.09),
-        kp_height=rng.uniform(1.0, 8.0),
-        kd_height=rng.uniform(0.1, 1.0),
-        crouch_offset=rng.uniform(-0.03, -0.005),
-        extend_offset=rng.uniform(0.03, 0.1),
-        landing_damping=rng.uniform(0.5, 2.0),
+def _sample_combined_params(rng: random.Random) -> CombinedParams:
+    return CombinedParams(
+        vmc=VmcParams(
+            nominal_height=rng.uniform(0.05, 0.09),
+            kp_height=rng.uniform(1.0, 8.0),
+            kd_height=rng.uniform(0.1, 1.0),
+            crouch_offset=rng.uniform(-0.03, -0.005),
+            extend_offset=rng.uniform(0.03, 0.1),
+            landing_damping=rng.uniform(0.5, 2.0),
+        ),
+        q_diag=np.array(
+            [
+                rng.uniform(10.0, 500.0),
+                rng.uniform(1.0, 100.0),
+                rng.uniform(0.1, 10.0),
+                rng.uniform(0.1, 10.0),
+            ]
+        ),
+        r_diag=np.array([rng.uniform(0.1, 10.0), rng.uniform(0.1, 10.0)]),
     )
 
 
