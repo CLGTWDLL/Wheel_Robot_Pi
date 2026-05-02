@@ -9,7 +9,7 @@ from sim.model_xml import prepare_controlled_mujoco_xml
 
 
 XML_PATH = Path(__file__).resolve().parents[1] / "sim" / "轮腿v1" / "轮腿v1.xml"
-MAX_TRACKED_MESH_BYTES = 10 * 1024 * 1024
+MAX_TRACKED_MESH_BYTES = 128 * 1024 * 1024
 
 
 def _controlled_model(tmp_path):

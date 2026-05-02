@@ -19,10 +19,10 @@ from sim.rollout import zero_controller
 XML_PATH = Path(__file__).resolve().parents[1] / "sim" / "轮腿v1" / "轮腿v1.xml"
 
 
-def test_parse_args_defaults_preserve_viewer_only_behavior():
+def test_parse_args_defaults_use_controlled_zero_controller():
     args = parse_args([])
 
-    assert args.mode == "viewer"
+    assert args.mode == "controlled"
     assert args.controller == "zero"
     assert args.scenario == "stand"
     assert args.xml == XML_PATH
