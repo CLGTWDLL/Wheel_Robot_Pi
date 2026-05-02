@@ -4,8 +4,9 @@ import numpy as np
 import pytest
 import mujoco
 
-from sim.controllers.balance_lqr import _reduced_balance_system, compute_balance_lqr_gain
+from sim.controllers.balance_lqr import _balance_state_selection, _reduced_balance_system, compute_balance_lqr_gain
 from sim.model_xml import prepare_controlled_mujoco_xml
+from sim.state import model_addresses
 
 
 XML_PATH = Path(__file__).resolve().parents[1] / "sim" / "轮腿v1" / "轮腿v1.xml"
@@ -37,6 +38,15 @@ def test_compute_balance_lqr_gain_changes_with_q_and_r(tmp_path):
     second = compute_balance_lqr_gain(model, data, np.array([1.0, 10.0, 0.1, 1.0]), np.array([1.0, 0.5]))
 
     assert not np.allclose(first, second)
+
+
+def test_balance_state_selection_matches_sim_state_pitch_sign(tmp_path):
+    model, _data = _model_and_data(tmp_path)
+    addresses = model_addresses(model)
+    selection = _balance_state_selection(model)
+
+    assert selection[0, addresses.root_qvel + 4] == -1.0
+    assert selection[1, model.nv + addresses.root_qvel + 4] == -1.0
 
 
 @pytest.mark.parametrize(

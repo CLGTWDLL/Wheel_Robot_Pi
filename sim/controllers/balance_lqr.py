@@ -59,8 +59,8 @@ def _balance_state_selection(model: Any) -> np.ndarray:
     pitch_rate_index = model.nv + addresses.root_qvel + 4
     wheel_dof_indices = [addresses.joint_qvel[name] for name in MODEL_SEMANTICS.wheel_joints]
 
-    p[0, pitch_index] = 1.0
-    p[1, pitch_rate_index] = 1.0
+    p[0, pitch_index] = -1.0
+    p[1, pitch_rate_index] = -1.0
     for dof_index in wheel_dof_indices:
         p[2, dof_index] = 1.0 / len(wheel_dof_indices)
         p[3, model.nv + dof_index] = 1.0 / len(wheel_dof_indices)
