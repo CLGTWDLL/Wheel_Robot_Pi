@@ -41,6 +41,7 @@ class CombinedParams:
     velocity_ki: float = 0.1
     yaw_damping: float = 0.5
     yaw_ki: float = 0.0
+    target_yaw_rate: float = 0.0
 
 
 class CombinedController:
@@ -95,8 +96,7 @@ class CombinedController:
         velocity_error = self.params.target_velocity - current_wheel_vel
         
         # 积分只在没有饱和时累加，防止积分饱和 (anti-windup)
-        # pitch_lean 的输出范围受限，如果触及边界则停止积分
-        max_lean = 0.5
+        max_lean = 0.2
         pitch_p = self.params.pitch_lean_gain * velocity_error
         pitch_i = self.params.velocity_ki * self._velocity_integral
         
@@ -108,13 +108,18 @@ class CombinedController:
         pitch_lean = np.clip(pitch_lean, -max_lean, max_lean)
         self._lqr_controller.target[0] = self.params.pitch_trim - pitch_lean
         
-        # 当从静止(stand)切换到运动(drive)时，重置目标位置到当前位置，避免位置环由于累积误差产生巨大的反向力矩
-        if abs(self._prev_target_velocity) < 1e-3 and abs(self.params.target_velocity) >= 1e-3:
+        # 当处于运动模式时，持续同步目标位置到当前位置，彻底消除位置环的“橡皮筋”效应。
+        if abs(self.params.target_velocity) > 1e-3:
+            # target[2] 使用米为单位，与 _forward_wheel_position 匹配
             self._lqr_controller.target[2] = self._forward_wheel_position(state)
+        else:
+            self._lqr_controller.target[2] += self.params.target_velocity * dt
             
-        # 积分目标轮子位置，避免位置环变成阻碍前进的"橡胶筋"
-        self._lqr_controller.target[2] += self.params.target_velocity * dt
-        self._lqr_controller.target[3] = self.params.target_velocity
+        # 保持 target[3] 为 m/s，利用原本稳定的比例缩放
+        # target[3] MUST be 0.0 so the LQR acts as a pure velocity damper.
+        # If target[3] tracked target_velocity, the LQR would apply driving torque that directly opposes the base pitch torque,
+        # causing violent oscillations and instability. The PI pitch leaner handles velocity tracking by leaning the robot.
+        self._lqr_controller.target[3] = 0.0
         
         self._prev_target_velocity = self.params.target_velocity
 
@@ -146,9 +151,10 @@ class CombinedController:
 
         # yaw PI 控制: P=角速度阻尼, I=消除稳态偏航偏置
         yaw_rate = float(state.base_angular_velocity[2])
-        self._yaw_integral += yaw_rate * model.opt.timestep
+        yaw_error = yaw_rate - self.params.target_yaw_rate
+        self._yaw_integral += yaw_error * model.opt.timestep
         self._yaw_integral = np.clip(self._yaw_integral, -5.0, 5.0)
-        yaw_correction = -(self.params.yaw_damping * yaw_rate
+        yaw_correction = -(self.params.yaw_damping * yaw_error
                            + self.params.yaw_ki * self._yaw_integral)
 
         control = np.zeros(model.nu)
@@ -158,23 +164,48 @@ class CombinedController:
             # 差速偏航修正：左侧减力、右侧加力实现反向偏航修正
             diff = yaw_correction * (-1.0 if i == 0 else 1.0)
             control[actuator_index] = sign * (avg_forward + diff)
-        for joint_name in MODEL_SEMANTICS.leg_motor_joints:
-            actuator_index = addresses.actuators[joint_name]
-            control[actuator_index] = vmc_control[actuator_index]
+        if self.params.vmc.kp_height == 0.0:
+            if not hasattr(self, '_initial_leg_positions'):
+                self._initial_leg_positions = state.leg_joint_positions.copy()
+            for joint_name in MODEL_SEMANTICS.leg_motor_joints:
+                actuator_index = addresses.actuators[joint_name]
+                q_err = self._initial_leg_positions[joint_name] - state.leg_joint_positions[joint_name]
+                v_err = 0.0 - state.leg_joint_velocities[joint_name]
+                control[actuator_index] = 300.0 * q_err + 10.0 * v_err
+        else:
+            for joint_name in MODEL_SEMANTICS.leg_motor_joints:
+                actuator_index = addresses.actuators[joint_name]
+                control[actuator_index] = vmc_control[actuator_index]
 
-        clipped = np.clip(control, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
+        clipped = control.copy()
+        for joint_name in MODEL_SEMANTICS.wheel_joints:
+            act_idx = addresses.actuators[joint_name]
+            clipped[act_idx] = np.clip(control[act_idx], model.actuator_ctrlrange[act_idx, 0], model.actuator_ctrlrange[act_idx, 1])
+        if self.params.vmc.kp_height > 0.0:
+            for joint_name in MODEL_SEMANTICS.leg_motor_joints:
+                act_idx = addresses.actuators[joint_name]
+                clipped[act_idx] = np.clip(control[act_idx], model.actuator_ctrlrange[act_idx, 0], model.actuator_ctrlrange[act_idx, 1])
+        
         if not np.all(np.isfinite(clipped)):
             raise ValueError("combined control must be finite")
         return clipped
 
     @staticmethod
     def _forward_wheel_position(state: SimState) -> float:
-        """计算真实的底盘前进位置。"""
-        # quat=[0,1,0,0] 下机器人的前进方向是全局 Y 轴
-        return float(state.base_position[1])
+        """计算真实的底盘前进位置（米）。通过轮子转角计算，不受 Yaw 旋转影响。"""
+        wheel_radius = 0.036
+        forward_positions = [
+            WHEEL_FORWARD_SIGNS[name] * state.wheel_positions["left" if "left" in name else "right"]
+            for name in MODEL_SEMANTICS.wheel_joints
+        ]
+        return float(np.mean(forward_positions)) * wheel_radius
 
     @staticmethod
     def _forward_wheel_velocity(state: SimState) -> float:
-        """计算真实的底盘前进速度。"""
-        # quat=[0,1,0,0] 下机器人的前进方向是全局 Y 轴
-        return float(state.base_linear_velocity[1])
+        """计算真实的底盘前进速度（米/秒）。通过轮速计算，不受 Yaw 旋转影响。"""
+        wheel_radius = 0.036
+        forward_velocities = [
+            WHEEL_FORWARD_SIGNS[name] * state.wheel_velocities["left" if "left" in name else "right"]
+            for name in MODEL_SEMANTICS.wheel_joints
+        ]
+        return float(np.mean(forward_velocities)) * wheel_radius

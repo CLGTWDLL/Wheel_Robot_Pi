@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import mujoco
 import numpy as np
 
 from sim.controllers.lqr import solve_discrete_lqr
@@ -34,6 +35,13 @@ def compute_balance_lqr_gain(
 def _reduced_balance_system(model: Any, data: Any) -> tuple[np.ndarray, np.ndarray]:
     state = np.concatenate([data.qpos.copy(), data.qvel.copy()])
     control = np.zeros(model.nu)
+    
+    # NEW: Apply gravity compensation to the leg motors so the robot doesn't collapse
+    mujoco.mj_forward(model, data)
+    addresses = model_addresses(model)
+    for jname in MODEL_SEMANTICS.leg_motor_joints:
+        control[addresses.actuators[jname]] = data.qfrc_bias[addresses.joint_qvel[jname]]
+        
     result = linearize_transition(model, state, control)
     if not result.valid:
         reason = f": {result.reason}" if result.reason else ""
@@ -55,9 +63,9 @@ def _reduced_balance_system(model: Any, data: Any) -> tuple[np.ndarray, np.ndarr
 def _balance_state_selection(model: Any) -> np.ndarray:
     addresses = model_addresses(model)
     p = np.zeros((4, 2 * model.nv))
-    # 绕 X 轴的旋转 (Roll) 及其角速度 wx — quat=[0,1,0,0] 下的倾倒轴
-    pitch_index = addresses.root_qvel + 3
-    pitch_rate_index = model.nv + addresses.root_qvel + 3
+    # 绕 Y 轴的旋转 (Pitch) 及其角速度 wy — quat=[0,1,0,0] 下的倾倒轴
+    pitch_index = addresses.root_qvel + 4
+    pitch_rate_index = model.nv + addresses.root_qvel + 4
     wheel_dof_indices = [addresses.joint_qvel[name] for name in MODEL_SEMANTICS.wheel_joints]
 
     p[0, pitch_index] = 1.0

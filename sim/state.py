@@ -77,9 +77,9 @@ def extract_sim_state(model: mujoco.MjModel, data: mujoco.MjData) -> SimState:
         base_quaternion=base_quaternion,
         base_linear_velocity=np.array(data.qvel[root_qvel : root_qvel + 3], dtype=float),
         base_angular_velocity=base_angular_velocity,
-        # 轮轴沿世界 X 轴，底盘翻转180°后倾倒方向绕 X 轴 (wx)。
+        # 绕 Y 轴的旋转 (Pitch) 及其角速度 wy — quat=[0,1,0,0] 下的倾倒轴
         pitch=_pitch_from_quaternion(base_quaternion),
-        pitch_rate=float(base_angular_velocity[0]),
+        pitch_rate=float(base_angular_velocity[1]),
         wheel_positions={side: float(data.qpos[addresses.joint_qpos[name]]) for side, name in wheel_names.items()},
         wheel_velocities={side: float(data.qvel[addresses.joint_qvel[name]]) for side, name in wheel_names.items()},
         leg_joint_positions={
@@ -101,10 +101,6 @@ def _actuator_for_joint(model: mujoco.MjModel, joint_id: int) -> int:
 
 def _pitch_from_quaternion(quaternion: np.ndarray) -> float:
     w, x, y, z = quaternion
-    # 提取绕 X 轴的旋转 (Roll)，quat=[0,1,0,0]时为平衡点
-    sinr = 2.0 * (w * x + y * z)
-    cosr = 1.0 - 2.0 * (x * x + y * y)
-    roll = float(np.arctan2(sinr, cosr))
-    # 平衡点 quat=[0,1,0,0] 对应 roll=pi, 偏差 = roll - pi
-    error = roll - np.pi if roll >= 0 else roll + np.pi
-    return float(error)
+    # 提取绕本地 Y 轴的旋转 (Pitch)
+    sinp = 2.0 * (w * y - z * x)
+    return float(np.arcsin(np.clip(sinp, -1.0, 1.0)))
