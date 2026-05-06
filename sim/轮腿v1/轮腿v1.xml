@@ -1,23 +1,32 @@
 <mujoco model="轮腿v1">
     <compiler angle="radian" />
+    <option timestep="0.0005" solver="Newton" iterations="50" tolerance="1e-10">
+        <flag warmstart="enable" />
+    </option>
+    <default>
+        <joint damping="0.01" />
+    </default>
     <asset>
+        <texture name="grid" type="2d" builtin="checker" rgb1="0.1 0.2 0.3" rgb2="0.2 0.3 0.4" width="512" height="512" />
+        <material name="grid_mat" texture="grid" texrepeat="8 8" texuniform="true" reflectance="0.2" />
+        <mesh name="base_link" file="meshes/base_link.stl" scale="0.001 0.001 0.001" />
         <mesh name="robot_link1_left" file="meshes/robot_link1_left.stl" scale="0.001 0.001 0.001" />
-        <mesh name="robot_wheel_left" file="meshes/robot_wheel_left.stl" scale="0.001 0.001 0.001" />
+
         <mesh name="robot_link2_left" file="meshes/robot_link2_left.stl" scale="0.001 0.001 0.001" />
         <mesh name="robot_link3_left" file="meshes/robot_link3_left.stl" scale="0.001 0.001 0.001" />
         <mesh name="robot_link3_right" file="meshes/robot_link3_right.stl" scale="0.001 0.001 0.001" />
         <mesh name="robot_link2_right" file="meshes/robot_link2_right.stl" scale="0.001 0.001 0.001" />
         <mesh name="robot_link1_right" file="meshes/robot_link1_right.stl" scale="0.001 0.001 0.001" />
-        <mesh name="robot_wheel_right" file="meshes/robot_wheel_right.stl" scale="0.001 0.001 0.001" />
+
     </asset>
     <worldbody>
         <light directional="true" pos="-0.5 0.5 3" dir="0 0 -1" />
-        <geom pos="0 0 0" size="1 1 1" type="plane" rgba="1 0.83 0.61 0.5" />
-        <body name="base_link" pos="0 0 0.31" euler="3.141592653589793 0 0">
-            <geom name="base_link_geom" type="box" size="0.08 0.12 0.04" pos="0 0 0" euler="0 0 0" contype="0" conaffinity="0" group="1" />
-            <inertial mass="1.0151346729857265" pos="0.0005337578146895701 0.34107081948840645 -0.1376487452325793" fullinertia="0.0022603249047739027 0.0033249253420046896 0.0037291749507083636 -2.4276206741919606e-06 -6.288547517541241e-05 0.00039958298524939227" />
+        <geom pos="0 0 0" size="0 0 1" type="plane" material="grid_mat" />
+        <body name="base_link" pos="0 0 0.06978" euler="3.141592653589793 0 0">
+            <geom name="base_link_geom" type="mesh" mesh="base_link" pos="0 0 0" euler="0 0 0" contype="0" conaffinity="0" group="1" />
+            <inertial mass="1.0151346729857265" pos="0.0005337578146895701 0.096 -0.1376487452325793" fullinertia="0.0022603249047739027 0.0033249253420046896 0.0037291749507083636 -2.4276206741919606e-06 -6.288547517541241e-05 0.00039958298524939227" />
             <body name="robot_link1_left" pos="0.11100000000000015 0.026016243723544823 0.06760360099921775" quat="1.7980314490330053e-16 -2.8138712139802418e-16 -0.48374530595137988 -0.87520882020807234">
-                <joint name="robot_base_link_r1" type="hinge" axis="-1.0 2.367691339168173e-15 -1.0980745746586071e-15" pos="0.01700000000000065 -0.3428055316600562 0.1501447569706837" />
+                <joint name="robot_base_link_r1" type="hinge" axis="-1.0 2.367691339168173e-15 -1.0980745746586071e-15" pos="0.01700000000000065 -0.3428055316600562 0.1501447569706837" limited="true" range="0.4 2.0" />
                 <geom name="robot_link1_left_geom" type="mesh" mesh="robot_link1_left" pos="0 0 0" euler="0 0 0" />
                 <inertial mass="0.034170053825688045" pos="0.0069999983222409625 -0.32460877566040924 0.1571066976588394" fullinertia="2.1479023160110577e-05 6.276276513840942e-06 1.780699638843389e-05 1.860953514789229e-11 -9.006790479627949e-12 -5.167807612132189e-06" />
                 <body name="robot_link2_left" pos="-4.8710364320342786e-16 -0.30730942267831063 -0.22223070030469932" quat="0.26426118955745259 -0.96445115153318162 8.4402460489099334e-16 6.7922462955595984e-16">
@@ -28,7 +37,7 @@
                     <inertial mass="0.06493550656605085" pos="0.009876491555607242 -0.2833736256305642 -0.34033803447719335" fullinertia="0.00018014507365024524 2.0124739042353606e-05 0.0001637755897824712 8.641706094220401e-06 2.315538169171176e-06 -4.1415081279847825e-05" />
                     <body name="robot_wheel_left" pos="-0.031999999999999772 8.4225494215482201e-16 0.070284039443190421" quat="0.5 -0.49999999999999989 -0.49999999999999967 -0.50000000000000044">
                         <joint name="robot_link2_left_r3" type="hinge" axis="2.7306905876702517e-15 -1.0 3.3708373003876025e-16" pos="-0.4221841150678715 0.042000000000000516 -0.32652428481832174" />
-                        <geom name="robot_wheel_left_geom" type="mesh" mesh="robot_wheel_left" pos="0 0 0" euler="0 0 0" />
+                        <geom name="robot_wheel_left_geom" type="cylinder" size="0.036 0.02225" pos="-0.422183 0.01975 -0.326531" euler="1.5707963 0 0" rgba="0.3 0.3 0.3 1" />
                         <inertial mass="1.0657044593105747" pos="-0.4221910379946552 0.016259606334897345 -0.3265220477169558" fullinertia="0.00043627509735323606 0.0006676023336660286 0.0004362733568485527 1.751069953311196e-07 -5.024391252307419e-10 -4.691977819530102e-08" />
                     </body>
                 </body>
@@ -48,7 +57,7 @@
                 <inertial mass="0.009709743586677332" pos="0.0029999999999985576 0.20385260215670514 0.13088249586803508" fullinertia="5.057068232748596e-06 7.655585815835607e-07 4.3497681126841974e-06 -7.75390289517999e-20 4.3200665109168473e-19 1.034767830620502e-06" />
             </body>
             <body name="robot_link1_right" pos="-0.11100000000000029 0.076813217147485388 0.11017642235597321" quat="0.5167854147443337 0.8561149660574372 -8.7306785538394259e-17 -1.4836737827771369e-15">
-                <joint name="robot_base_link_r9" type="hinge" axis="-0.9999999999999988 -2.986721194252543e-15 1.1659313370913237e-15" pos="0.01699999999999896 -0.3443649479697041 -0.111065886771514" />
+                <joint name="robot_base_link_r9" type="hinge" axis="-0.9999999999999988 -2.986721194252543e-15 1.1659313370913237e-15" pos="0.01699999999999896 -0.3443649479697041 -0.111065886771514" limited="true" range="-2.0 -0.4" />
                 <geom name="robot_link1_right_geom" type="mesh" mesh="robot_link1_right" pos="0 0 0" euler="0 0 0" />
                 <inertial mass="0.034170053825688" pos="0.006999998322239509 -0.32616810732542684 -0.11802781481245113" fullinertia="2.147894341400497e-05 6.276188456673383e-06 1.7807004699347967e-05 1.8698940200293885e-11 6.766439852537293e-12 5.167909996290491e-06" />
                 <body name="robot_link2_right" pos="5.1150212000876517e-16 -0.11691473150315217 0.20678786052302353" quat="0.46386980825632068 0.88590338129405743 6.4391759152639493e-16 -8.3307966858813509e-16">
@@ -59,7 +68,7 @@
                     <inertial mass="0.06493550656605086" pos="0.009876491555605566 -0.2441772203945731 0.3412144953406124" fullinertia="0.00018014507365215988 2.0124739042357435e-05 0.00016377558978244983 8.641706094238741e-06 -2.315538169199958e-06 4.141508127983642e-05" />
                     <body name="robot_wheel_right" pos="-0.032000000000000035 -4.9818405258678594e-15 -0.070284039443185314" quat="0.50000000000000089 0.49999999999999978 0.49999999999999972 -0.49999999999999978">
                         <joint name="robot_link2_right_r7" type="hinge" axis="-3.1801498600866606e-15 -0.9999999999999986 -1.2812146008532522e-15" pos="-0.4230608295366603 0.04199999999999858 0.2873272974104172" />
-                        <geom name="robot_wheel_right_geom" type="mesh" mesh="robot_wheel_right" pos="0 0 0" euler="0 0 0" />
+                        <geom name="robot_wheel_right_geom" type="cylinder" size="0.036 0.02225" pos="-0.423059 0.01975 0.287335" euler="1.5707963 0 0" rgba="0.3 0.3 0.3 1" />
                         <inertial mass="1.0657044593105751" pos="-0.42306749885817785 0.016259606334895614 0.2873256424809224" fullinertia="0.0004362750973516679 0.0006676023337179851 0.0004362733568501379 1.7510699430900798e-07 5.024393676106047e-10 4.6919777118797586e-08" />
                     </body>
                 </body>
@@ -67,12 +76,12 @@
         </body>
     </worldbody>
     <equality>
-        <connect name="robot_link23_left_connect_a" site1="robot_link2_left_connect_site_a" site2="robot_link3_left_connect_site_a" solref="0.001 1" solimp="0.99 0.999 0.001 0.5 2" />
-        <connect name="robot_link23_left_connect_b" site1="robot_link2_left_connect_site_b" site2="robot_link3_left_connect_site_b" solref="0.001 1" solimp="0.99 0.999 0.001 0.5 2" />
-        <connect name="robot_link23_right_connect_a" site1="robot_link2_right_connect_site_a" site2="robot_link3_right_connect_site_a" solref="0.001 1" solimp="0.99 0.999 0.001 0.5 2" />
-        <connect name="robot_link23_right_connect_b" site1="robot_link2_right_connect_site_b" site2="robot_link3_right_connect_site_b" solref="0.001 1" solimp="0.99 0.999 0.001 0.5 2" />
+        <connect name="robot_link23_left_connect_a" site1="robot_link2_left_connect_site_a" site2="robot_link3_left_connect_site_a" solref="0.005 1" solimp="0.95 0.99 0.001 0.5 2" />
+        <connect name="robot_link23_left_connect_b" site1="robot_link2_left_connect_site_b" site2="robot_link3_left_connect_site_b" solref="0.005 1" solimp="0.95 0.99 0.001 0.5 2" />
+        <connect name="robot_link23_right_connect_a" site1="robot_link2_right_connect_site_a" site2="robot_link3_right_connect_site_a" solref="0.005 1" solimp="0.95 0.99 0.001 0.5 2" />
+        <connect name="robot_link23_right_connect_b" site1="robot_link2_right_connect_site_b" site2="robot_link3_right_connect_site_b" solref="0.005 1" solimp="0.95 0.99 0.001 0.5 2" />
     </equality>
     <keyframe>
-        <key name="link23_connected_home" qpos="0.0349529463 -0.0089214078 0.0 0.2138040473 0.2927174121 -0.1111013322 0.4201804747 0.0" />
+        <key name="link23_connected_home" qpos="0.7990 -1.7096 0.1951 -0.9520 1.5133 -0.9317 -1.3671 -0.2672" />
     </keyframe>
 </mujoco>

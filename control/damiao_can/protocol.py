@@ -58,6 +58,10 @@ def disable_frame(motor: MotorConfig) -> CanFrame:
     return _standard_command_frame(motor, 0xFD)
 
 
+def standard_disable_frame(can_id: int) -> CanFrame:
+    return CanFrame(can_id, b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFD")
+
+
 def zero_position_frame(motor: MotorConfig) -> CanFrame:
     return _standard_command_frame(motor, 0xFE)
 

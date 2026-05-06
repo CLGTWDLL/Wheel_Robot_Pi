@@ -26,8 +26,8 @@ class MotorConfig(DeviceConfig):
 MOTORS: tuple[MotorConfig, ...] = (
     MotorConfig(name="dm4310_left", can_id=0x02, master_id=0x12, mode="mit", v_max=30.0),
     MotorConfig(name="dm4310_right", can_id=0x03, master_id=0x13, mode="mit", v_max=30.0),
-    MotorConfig(name="dmh6215_left", can_id=0x04, master_id=0x14, mode="torque", v_max=45.0),
-    MotorConfig(name="dmh6215_right", can_id=0x05, master_id=0x15, mode="torque", v_max=45.0),
+    MotorConfig(name="dmh6215_left", can_id=0x04, master_id=0x14, mode="velocity", v_max=45.0),
+    MotorConfig(name="dmh6215_right", can_id=0x05, master_id=0x15, mode="velocity", v_max=45.0),
 )
 
 DEVICES: tuple[DeviceConfig, ...] = (

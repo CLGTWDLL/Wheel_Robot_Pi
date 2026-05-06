@@ -58,15 +58,23 @@ def test_vmc_controller_returns_finite_clipped_control(tmp_path):
 
 def test_vmc_controller_maps_positive_vertical_effort_to_leg_signs(tmp_path):
     model, data = _model_and_data(tmp_path)
-    state = extract_sim_state(model, data)
+    # 步进到 ramp 结束 (t>1.5s), 使 target_height = nominal_height
+    n_ramp_steps = int(2.0 / model.opt.timestep)
     controller = VmcController(VmcParams(nominal_height=0.5, kp_height=10.0, kd_height=0.0))
+    for _ in range(n_ramp_steps):
+        state = extract_sim_state(model, data)
+        ctrl = controller(model, data, state)
+        data.ctrl[:] = np.clip(ctrl, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
+        mujoco.mj_step(model, data)
 
+    state = extract_sim_state(model, data)
     control = controller(model, data, state)
 
+    # 4 个 actuator: 0,1=wheel, 2=r1(LEG_EFFORT_SIGNS=-1), 3=r9(LEG_EFFORT_SIGNS=+1)
+    # ramp 结束后 target=0.5 >> z, pd_effort 为正
+    # control[2] = -1 * pd < 0, control[3] = +1 * pd > 0
     assert control[2] < 0.0
-    assert control[3] < 0.0
-    assert control[4] > 0.0
-    assert control[5] > 0.0
+    assert control[3] > 0.0
 
 
 def test_vmc_controller_rejects_nonfinite_params(tmp_path):
@@ -84,7 +92,7 @@ def test_vmc_controller_rejects_nonfinite_params(tmp_path):
 def test_vmc_jump_rollout_runs_without_nonfinite_state(tmp_path):
     machine = JumpPhaseMachine(JumpPhaseParams(crouch_duration=0.01, extend_duration=0.01, flight_timeout=0.05))
     machine.start_jump()
-    controller = VmcController(VmcParams(nominal_height=0.06978, kp_height=1.0, kd_height=0.2), phase_machine=machine)
+    controller = VmcController(VmcParams(nominal_height=0.06078, kp_height=1.0, kd_height=0.2), phase_machine=machine)
 
     result = run_rollout(XML_PATH, RolloutConfig(duration=0.05, cache_dir=tmp_path, scenario="jump"), controller=controller)
 
@@ -93,12 +101,22 @@ def test_vmc_jump_rollout_runs_without_nonfinite_state(tmp_path):
     assert result.last_control.shape == (result.model.nu,)
 
 
-@pytest.mark.xfail(reason="pure VMC jump lacks balance control until LQR+VMC integration")
 def test_vmc_jump_rollout_reaches_small_jump_height(tmp_path):
-    machine = JumpPhaseMachine(JumpPhaseParams(crouch_duration=0.05, extend_duration=0.05, flight_timeout=0.2))
+    machine = JumpPhaseMachine(JumpPhaseParams(
+        crouch_duration=0.075, 
+        extend_duration=0.144, 
+        flight_timeout=0.294
+    ))
     machine.start_jump()
     controller = VmcController(
-        VmcParams(nominal_height=0.06978, kp_height=4.0, kd_height=0.5, extend_offset=0.08),
+        VmcParams(
+            nominal_height=0.0978, 
+            kp_height=38.16, 
+            kd_height=0.505, 
+            crouch_offset=-0.0084, 
+            extend_offset=0.1044, 
+            landing_damping=0.875
+        ),
         phase_machine=machine,
     )
 

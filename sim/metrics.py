@@ -12,6 +12,7 @@ class RolloutMetrics:
     max_base_height: float
     max_jump_height: float
     max_abs_pitch: float
+    max_abs_y_drift: float
     forward_distance: float
     contact_count: int
     control_effort: float

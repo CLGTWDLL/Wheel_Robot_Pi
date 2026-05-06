@@ -28,11 +28,14 @@ def test_model_semantics_declares_expected_control_roles():
     assert set(MODEL_SEMANTICS.wheel_joints) == {"robot_link2_left_r3", "robot_link2_right_r7"}
     assert set(MODEL_SEMANTICS.leg_motor_joints) == {
         "robot_base_link_r1",
-        "robot_base_link_r2",
-        "robot_base_link_r4",
         "robot_base_link_r9",
     }
-    assert set(MODEL_SEMANTICS.passive_joints) == {"robot_link1_left_r8", "robot_link1_right_r6"}
+    assert set(MODEL_SEMANTICS.passive_joints) == {
+        "robot_base_link_r2",
+        "robot_base_link_r4",
+        "robot_link1_left_r8",
+        "robot_link1_right_r6",
+    }
 
 
 def test_model_semantics_references_existing_connect_sites():

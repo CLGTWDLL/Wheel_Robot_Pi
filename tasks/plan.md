@@ -2,14 +2,14 @@
 
 ## Context
 
-目标是在 macOS 上通过已连接的 USB-CAN 串口设备调通 4 个达妙电机和 DM-IMU：Python 负责 CLI、设备表、协议组织和安全限幅，C++ 负责底层串口/CAN 帧收发。第一阶段重点不是高性能控制，而是安全确认“4 个电机能否一起接收命令”，并保持测试参数保守。
+目标是在 macOS 上通过已连接的达妙 USB-CAN 虚拟串口设备调通 4 个达妙电机和 DM-IMU：Python 负责 CLI、设备表、协议组织、安全限幅，并通过 `control/damiao_usbcan.py` 按达妙 USB-CAN 二进制协议收发 CAN 帧。第一阶段重点不是高性能控制，而是安全确认“4 个电机能否一起接收命令”，并保持测试参数保守。
 
 已读取并核对：
 
-- `SPEC.md`：已确认 Python 主入口、C++ 底层、SLCAN/串口、保守 group 测试边界。
-- `CLAUDE.md`：硬件 CAN 配置：DM-IMU `0x01/0x11`，DM4310 左右 `0x02/0x12`、`0x03/0x13` MIT，DMH6215 左右 `0x04/0x14`、`0x05/0x15` 力矩。
+- `SPEC.md`：已确认 Python 主入口、达妙 USB-CAN 虚拟串口二进制协议、保守 group 测试边界。
+- `CLAUDE.md`：硬件 CAN 配置：DM-IMU `0x01/0x11`，DM4310 左右 `0x02/0x12`、`0x03/0x13` MIT，DMH6215 左右 `0x04/0x14`、`0x05/0x15` 速度。
 - `control/damiao_can/protocol.py`：已有 `CanFrame`、MIT 编码、enable/disable/zero-position、反馈解码、参数帧。
-- `control/damiao_can/motors.py`：已有 4 电机表，但 DMH6215 当前是 `velocity`，需要改成 `torque`。
+- `control/damiao_can/motors.py`：已有 4 电机表，但 DMH6215 当前按 `velocity` 速度模式控制，不能改成 `torque`。
 - `pyproject.toml`：当前仅有 `mujoco` 依赖；后续可能需要 `pyserial`、`pytest`、`pybind11`。
 
 关键约束：
@@ -29,8 +29,8 @@ SPEC.md + CLAUDE.md
         -> 单电机命令构建
         -> group zero / group conservative-test 命令构建
            -> FakeCanBus 与执行器
-           -> macOS C++ 串口/CAN backend
-              -> Python slcan wrapper
+           -> macOS 达妙 USB-CAN 虚拟串口 backend
+              -> control/damiao_usbcan.py
                  -> CLI: list-ports / sniff / motor / group / imu
                     -> 实机验证流程
 ```
@@ -48,7 +48,7 @@ SPEC.md + CLAUDE.md
 - 设备表包含 `dm_imu`、`dm4310_left`、`dm4310_right`、`dmh6215_left`、`dmh6215_right`。
 - CAN_ID/MST_ID 与 `CLAUDE.md` 完全一致。
 - DM4310 模式为 `mit`。
-- DMH6215 模式改为 `torque`。
+- DMH6215 模式保持 `velocity`。
 - 没有暴露参数保存、写 flash 或设零点的默认实机命令。
 
 验证：
@@ -63,7 +63,7 @@ SPEC.md + CLAUDE.md
 验收标准：
 
 - 继续复用 enable/disable/MIT 编码。
-- 增加 DMH6215 torque-mode frame builder。
+- 使用 DMH6215 velocity-mode frame builder。
 - `group zero` 生成 4 帧，顺序固定为 `dm4310_left`、`dm4310_right`、`dmh6215_left`、`dmh6215_right`。
 - `group zero` 明确不调用 `zero_position_frame`，不产生 `0xFE`。
 
@@ -108,24 +108,24 @@ SPEC.md + CLAUDE.md
 
 Checkpoint A：只有在 `uv run pytest` 通过、设备表一致、DMH6215 模式已修正、`group zero` 确认不是设零点后，才进入真实串口 backend。
 
-### Phase 2: macOS 串口/CAN backend 与只读 CLI
+### Phase 2: macOS 达妙 USB-CAN backend 与只读 CLI
 
-#### Task 5 — 实现 macOS C++ 串口/CAN backend
+#### Task 5 — 实现 macOS 达妙 USB-CAN 虚拟串口 backend
 
-改动目标：新增 `control/native/slcan_bus.cpp`、`control/native/bindings.cpp`、`control/slcan.py`，并更新 `pyproject.toml` 构建依赖。
+改动目标：新增 `control/damiao_usbcan.py`，按达妙 ROS1 例程封装 USB-CAN 虚拟串口二进制协议；不再使用 C++ native wrapper。
 
 验收标准：
 
-- 使用 macOS POSIX/termios，不依赖 Linux-only 头文件。
+- 默认串口波特率 `921600`，CAN bitrate `1000000`。
 - open/read/write/close 都有 timeout 或明确错误。
 - Python 侧统一暴露 `send(CanFrame)` / `recv(timeout)`。
-- 底层 codec 先按实机确认：标准 ASCII SLCAN 或达妙 USB-CAN 二进制串口协议；上层接口保持不变。
+- 二进制协议封装参考达妙 ROS1 例程；上层接口保持不变。
 - 不存在串口时错误清楚，不 hang。
 
 验证：
 
-- `uv run pytest tests/test_slcan_codec.py`
 - `uv run python -m control.can_tool sniff --port /dev/nonexistent --duration 0.2`
+- 运行相关 USB-CAN codec/CLI 测试
 
 #### Task 6 — 实现 `list-ports` 与 `sniff`
 
@@ -135,6 +135,7 @@ Checkpoint A：只有在 `uv run pytest` 通过、设备表一致、DMH6215 模�
 
 - `list-ports` 列出 macOS `/dev/cu.*` 和 `/dev/tty.*`。
 - `sniff` 支持 `--port`、`--serial-baud`、`--can-bitrate`、`--duration`。
+- CLI 默认 serial baud 为 `921600`，CAN bitrate 为 `1000000`。
 - CLI 打印 backend、serial baud、CAN bitrate。
 - 打印 timestamp、arbitration_id、dlc、data。
 - timeout 后正常退出。
@@ -165,7 +166,7 @@ Checkpoint B：确认能找到 USB-CAN 串口，确认设备真实协议，且�
 - fake bus 测试 enable/disable frame。
 - 实机单电机：`uv run python -m control.can_tool motor enable --port <PORT> --motor dm4310_left` 后立即 disable。
 
-#### Task 8 — 单个 DMH6215 保守 torque 测试
+#### Task 8 — DMH6215 速度模式保守测试
 
 改动目标：`control/can_tool.py`、`control/damiao_can/safety.py`、`control/damiao_can/commands.py`。
 
@@ -180,7 +181,7 @@ Checkpoint B：确认能找到 USB-CAN 串口，确认设备真实协议，且�
 验证：
 
 - `uv run pytest tests/test_safety.py tests/test_cli.py`
-- 实机：`uv run python -m control.can_tool motor torque --port <PORT> --motor dmh6215_left --torque 0.02 --duration 0.3`
+- 实机：`uv run python -m control.can_tool pair conservative-spin --port <PORT> --velocity 0.2 --wheel-velocity 0.2 --duration 0.3`
 
 #### Task 9 — IMU raw read
 
@@ -198,7 +199,7 @@ Checkpoint B：确认能找到 USB-CAN 串口，确认设备真实协议，且�
 - `uv run python -m control.can_tool imu read --port <PORT> --duration 5.0`
 - fake bus 注入 IMU frame 测试。
 
-Checkpoint C：`sniff` 稳定、单电机 enable/disable 可用、单个 DMH6215 小 torque 能安全退出、IMU read 能运行到 duration 结束后，才进入 4 电机联动。
+Checkpoint C：`sniff` 稳定、单电机 enable/disable 可用、单个 DMH6215 速度模式 能安全退出、IMU read 能运行到 duration 结束后，才进入 4 电机联动。
 
 ### Phase 4: 四电机保守联动
 
@@ -231,7 +232,7 @@ Checkpoint D：人工确认电机安全支撑、急停/断电可用、`group zer
 - 启动时提示必须先完成 `group zero`。
 - 命令自身内置 pre-zero。
 - DM4310 使用零输出或当前位姿低增益 hold；没有可靠反馈时不拉绝对 0 位。
-- DMH6215 torque 不超过安全上限，默认建议 `0.02 N·m`，最多 `0.05 N·m`。
+- DMH6215 使用速度模式零输出或保守小速度，不发送 torque 帧。
 - duration 默认不超过 `0.5 s`。
 - 每个控制周期 4 帧同一 batch 发送，顺序固定。
 - 结束、异常、Ctrl-C 都发送 group zero，并尽量 disable。
@@ -244,7 +245,7 @@ Checkpoint D：人工确认电机安全支撑、急停/断电可用、`group zer
 - 实机前必须通过 Checkpoint D。
 - 实机：`uv run python -m control.can_tool group conservative-test --port <PORT> --duration 0.5`
 
-Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可用、单电机可控、单 DMH6215 小 torque 安全、`group zero` 可用、`group conservative-test` 在保守参数下可安全退出，且未写参数、未设零点、未使用激进参数。
+Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可用、单电机可控、单 DMH6215 速度模式安全、`group zero` 可用、`group conservative-test` 在保守参数下可安全退出，且未写参数、未设零点、未使用激进参数。
 
 ### Phase 5: 调试 runbook
 
@@ -255,7 +256,7 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 验收标准：
 
 - 写明实机前检查清单。
-- 写明推荐执行顺序：list-ports -> sniff/imu read -> 单电机 enable/disable -> 单 DMH6215 小 torque -> group zero -> group conservative-test。
+- 写明推荐执行顺序：list-ports -> sniff/imu read -> 单电机 enable/disable -> 单 DMH6215 速度模式 -> group zero -> group conservative-test。
 - 明确 `group zero` 是零输出，不是设零点。
 - 明确如需提高参数必须人工确认。
 - 提供日志模板：time、port、serial baud、CAN bitrate、command、targets、feedback、abnormal behavior、final safety state。
@@ -273,10 +274,9 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 - `control/damiao_can/commands.py`：新增命令构建与 group 命令。
 - `control/damiao_can/safety.py`：新增保守限幅策略。
 - `control/bus.py`、`control/fake_bus.py`：新增可测 bus 接口。
-- `control/slcan.py`：Python native backend wrapper。
-- `control/native/slcan_bus.cpp`、`control/native/bindings.cpp`：macOS C++ 串口/CAN backend。
+- `control/damiao_usbcan.py`：达妙 USB-CAN 虚拟串口二进制协议 backend。
 - `control/can_tool.py`：CLI 主入口。
-- `tests/test_devices.py`、`tests/test_damiao_protocol.py`、`tests/test_safety.py`、`tests/test_fake_bus.py`、`tests/test_group_commands.py`、`tests/test_cli.py`、`tests/test_slcan_codec.py`：离线验证。
+- `tests/test_devices.py`、`tests/test_damiao_protocol.py`、`tests/test_safety.py`、`tests/test_fake_bus.py`、`tests/test_group_commands.py`、`tests/test_cli.py`：离线验证。
 - `README.md` 或 `control/docs/hardware_bringup.md`：实机 runbook。
 - `pyproject.toml`：必要时添加 `pytest`、`pyserial`、`pybind11` 等依赖。
 
@@ -290,13 +290,13 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 - [ ] Task 1: 对齐设备表与硬件配置
   - [ ] 添加/确认 `dm_imu`
   - [ ] 确认 DM4310 左右为 MIT
-  - [ ] 修正 DMH6215 左右为 torque
+  - [ ] 修正 DMH6215 左右为 velocity
   - [ ] 添加设备表测试
   - [ ] 运行 `uv run pytest tests/test_devices.py`
 
 - [ ] Task 2: 补齐协议 command builders
   - [ ] 复用 enable/disable/MIT 编码
-  - [ ] 增加 DMH6215 torque frame
+  - [ ] 使用 DMH6215 velocity frame
   - [ ] 增加 group zero frame builder
   - [ ] 测试 group zero 不产生 `0xFE`
   - [ ] 运行 `uv run pytest tests/test_damiao_protocol.py`
@@ -321,14 +321,15 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
   - [ ] `group zero` 确认不是设零点
   - [ ] conservative 参数已硬限制
 
-## Phase 2: Local macOS Serial/CAN Backend
+## Phase 2: Local macOS Damiao USB-CAN Backend
 
-- [ ] Task 5: 实现 macOS C++ 串口/CAN backend
-  - [ ] 使用 macOS POSIX/termios
+- [ ] Task 5: 实现 macOS 达妙 USB-CAN 虚拟串口 backend
+  - [ ] Python 主入口通过 `control/damiao_usbcan.py`
+  - [ ] 默认串口波特率 `921600`，CAN bitrate `1000000`
   - [ ] open/read/write/close 有错误处理和 timeout
   - [ ] 暴露统一 Python bus 接口
-  - [ ] 确认 USB-CAN 是标准 SLCAN 还是达妙二进制协议
-  - [ ] 运行 `uv run pytest tests/test_slcan_codec.py`
+  - [ ] 确认达妙二进制协议收发细节（参考 ROS1 例程）
+  - [ ] 运行相关 USB-CAN codec/CLI 测试
 
 - [ ] Task 6: 实现 list-ports 与 sniff CLI
   - [ ] `list-ports` 列出 `/dev/cu.*` 和 `/dev/tty.*`
@@ -339,7 +340,7 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 - [ ] Checkpoint B: Local Serial Ready
   - [ ] 找到 USB-CAN 串口
   - [ ] nonexistent port 不 hang
-  - [ ] 确认真实串口协议
+  - [ ] 确认达妙二进制协议收发细节
   - [ ] 未发送任何非零电机输出
 
 ## Phase 3: Single Device Hardware Slice
@@ -349,12 +350,12 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
   - [ ] 实机单电机 enable 后立即 disable
   - [ ] 记录反馈或 timeout
 
-- [ ] Task 8: 单个 DMH6215 保守 torque 测试
+- [ ] Task 8: DMH6215 速度模式保守测试
   - [ ] 只允许 `dmh6215_left/right`
   - [ ] 默认 torque 建议 `0.02 N·m`，不超过 `0.05 N·m`
   - [ ] duration 不超过 `0.5 s`
   - [ ] 异常路径发送零输出
-  - [ ] 实机先跑 `--torque 0.02 --duration 0.3`
+  - [ ] 实机先跑 `--wheel-velocity 0.2 --duration 0.3`
 
 - [ ] Task 9: IMU raw read
   - [ ] duration 到时退出
@@ -364,7 +365,7 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 - [ ] Checkpoint C: Single Device Hardware Ready
   - [ ] sniff 稳定
   - [ ] enable/disable 可用
-  - [ ] 单 DMH6215 小 torque 安全退出
+  - [ ] 单 DMH6215 速度模式安全退出
   - [ ] IMU read 能运行到 duration 结束
 
 ## Phase 4: Four-Motor Vertical Slice
@@ -385,7 +386,7 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
   - [ ] 内置 pre-zero
   - [ ] 默认 duration 不超过 `0.5 s`
   - [ ] DM4310 不默认拉绝对 0 位
-  - [ ] DMH6215 不超过 torque 上限
+  - [ ] DMH6215 不发送 torque 帧
   - [ ] 结束/异常都发送 group zero
   - [ ] 不自动提高参数
 
@@ -428,15 +429,14 @@ uv run python -m control.can_tool sniff --port <PORT> --duration 5.0
 uv run python -m control.can_tool imu read --port <PORT> --duration 5.0
 uv run python -m control.can_tool motor enable --port <PORT> --motor dm4310_left
 uv run python -m control.can_tool motor disable --port <PORT> --motor dm4310_left
-uv run python -m control.can_tool motor torque --port <PORT> --motor dmh6215_left --torque 0.02 --duration 0.3
+uv run python -m control.can_tool pair conservative-spin --port <PORT> --velocity 0.2 --wheel-velocity 0.2 --duration 0.3
 uv run python -m control.can_tool group zero --port <PORT> --duration 1.0
 uv run python -m control.can_tool group conservative-test --port <PORT> --duration 0.5
 ```
 
 ## Risks
 
-- USB-CAN 可能不是标准 ASCII SLCAN，而是达妙二进制串口协议；先用 backend codec checkpoint 确认。
-- 现有 C++ 示例可能 Linux-only；macOS 需用 POSIX/termios 重新实现。
+- 达妙 USB-CAN 虚拟串口二进制协议需按 ROS1 例程封装，并用 backend codec checkpoint 确认。
 - DMH6215 当前代码模式与硬件配置不一致；必须先修正并测试。
 - `group zero` 容易误解为设零点；必须测试禁止 `0xFE`。
 - DM4310 若用绝对 0 位 + kp 可能意外动作；conservative-test 默认不这样做。

@@ -12,7 +12,7 @@ from sim.state import SimState
 TangentStateProvider = Callable[[mujoco.MjModel, mujoco.MjData, SimState], np.ndarray]
 
 
-@dataclass(frozen=True)
+@dataclass
 class LqrController:
     gain: np.ndarray
     target: np.ndarray

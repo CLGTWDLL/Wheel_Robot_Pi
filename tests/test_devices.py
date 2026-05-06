@@ -7,8 +7,8 @@ EXPECTED_DEVICES = {
     "dm_imu": {"can_id": 0x01, "master_id": 0x11, "mode": None},
     "dm4310_left": {"can_id": 0x02, "master_id": 0x12, "mode": "mit"},
     "dm4310_right": {"can_id": 0x03, "master_id": 0x13, "mode": "mit"},
-    "dmh6215_left": {"can_id": 0x04, "master_id": 0x14, "mode": "torque"},
-    "dmh6215_right": {"can_id": 0x05, "master_id": 0x15, "mode": "torque"},
+    "dmh6215_left": {"can_id": 0x04, "master_id": 0x14, "mode": "velocity"},
+    "dmh6215_right": {"can_id": 0x05, "master_id": 0x15, "mode": "velocity"},
 }
 
 

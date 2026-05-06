@@ -2,15 +2,15 @@
 
 ## 1. Objective
 
-第一阶段目标是在 macOS 上通过已连接的 USB 转 CAN 设备调通达妙电机与 DM-IMU 通信：上层用 Python 发命令，底层使用 C++ 封装 SLCAN 串口收发能力。
+第一阶段目标是在 macOS 上通过已连接的达妙 USB 转 CAN 设备调通达妙电机与 DM-IMU 通信：Python 主入口通过 `control/damiao_usbcan.py` 使用达妙 USB-CAN 虚拟串口二进制协议收发 CAN 帧。
 
 目标使用者是当前项目开发者本人，优先服务实机硬件调通，而不是先做完整机器人控制框架。
 
 成功标准：
 
-- 可以从 Python 打开 macOS 串口形式的 SLCAN 设备，例如 `/dev/tty.*` 或 `/dev/cu.*`。
+- 可以从 Python 打开 macOS 串口形式的达妙 USB-CAN 设备，例如 `/dev/tty.*` 或 `/dev/cu.*`，默认串口波特率 `921600`，CAN bitrate `1000000`。
 - 可以监听并打印原始 CAN 帧，用于确认总线上 DM-IMU 和电机是否有响应。
-- 可以对 4 个电机发送最小必要控制命令，包括 enable、disable，以及小范围 MIT/力矩测试命令。
+- 可以对 4 个电机发送最小必要控制命令，包括 enable、disable，以及小范围 MIT/速度测试命令。
 - 可以执行保守的多电机联动冒烟测试，确认 4 个电机能否在同一控制周期内一起接收命令。
 - 可以读取 DM-IMU 帧；第一版可以先打印原始帧和基础字段，完整姿态解码可后续补充。
 - 默认控制策略偏开发效率但测试参数保守：允许命令行直接发送小范围测试命令，但必须有强制限幅和命令超时停机。
@@ -22,8 +22,8 @@
 | DM-IMU | `0x01` | `0x11` | 读取 |
 | DM4310 左 | `0x02` | `0x12` | MIT 控制模式 |
 | DM4310 右 | `0x03` | `0x13` | MIT 控制模式 |
-| DMH6215 左 | `0x04` | `0x14` | 力矩控制模式 |
-| DMH6215 右 | `0x05` | `0x15` | 力矩控制模式 |
+| DMH6215 左 | `0x04` | `0x14` | 速度控制模式 |
+| DMH6215 右 | `0x05` | `0x15` | 速度控制模式 |
 
 ## 2. Commands
 
@@ -33,28 +33,26 @@
 
 ```bash
 uv run python -m control.can_tool list-ports
-uv run python -m control.can_tool sniff --port /dev/cu.usbmodemXXXX --baud 1000000
+uv run python -m control.can_tool sniff --port /dev/cu.usbmodemXXXX --serial-baud 921600 --can-bitrate 1000000
 uv run python -m control.can_tool motor enable --port /dev/cu.usbmodemXXXX --motor dm4310_left
 uv run python -m control.can_tool motor disable --port /dev/cu.usbmodemXXXX --motor dm4310_left
-uv run python -m control.can_tool motor torque --port /dev/cu.usbmodemXXXX --motor dmh6215_left --torque 0.05 --duration 0.5
+uv run python -m control.can_tool pair conservative-spin --port /dev/cu.usbmodemXXXX --velocity 0.2 --wheel-velocity 0.2 --duration 0.5
 uv run python -m control.can_tool group zero --port /dev/cu.usbmodemXXXX --duration 1.0
 uv run python -m control.can_tool group conservative-test --port /dev/cu.usbmodemXXXX --duration 0.5
 uv run python -m control.can_tool imu read --port /dev/cu.usbmodemXXXX --duration 5.0
 ```
 
-C++ 底层建议编译成 Python 扩展或本地共享库，具体方式优先选择项目成本最低的方案：
-
-- 若希望最少胶水代码：使用 `pybind11` 暴露 `SlcanBus`。
-- 若希望避免 Python 扩展构建复杂度：先编译 C++ CLI/动态库，再由 Python 包装；但第一版仍应保持 Python 为主要用户入口。
+不再使用 C++ native wrapper；第一版保持 Python 为主要用户入口，串口二进制协议封装放在 `control/damiao_usbcan.py`，协议细节参考达妙 ROS1 例程。
 
 核心命令行为：
 
 - `list-ports`：列出 macOS 可用串口，帮助用户找到 USB-CAN 设备。
-- `sniff`：打开 SLCAN，配置 CAN bitrate，打印 timestamp、arbitration_id、dlc、data。
+- `sniff`：打开达妙 USB-CAN 虚拟串口，校验/声明 CAN bitrate，项目不自动修改设备 CAN bitrate；打印 timestamp、arbitration_id、dlc、data。
 - `motor enable/disable`：按达妙协议发送电机使能/失能命令。
-- `motor torque`：对力矩模式电机发送限幅后的短时测试力矩，默认示例不超过 `0.05 N·m` 和 `0.5 s`。
-- `group zero`：对 4 个电机一起发送零输出命令，用于验证多电机命令路径和总线写入顺序。
-- `group conservative-test`：按保守参数对 4 个电机一起发送短时命令；DM4310 使用零位置/零速度/低增益 MIT 命令，DMH6215 使用极小力矩命令。
+- `motor torque`：只对真实配置为力矩模式的电机发送限幅后的短时测试力矩；当前 0x04/0x05 为速度模式，不适用该命令。
+- `pair conservative-spin`：只针对 `0x02` 与 `0x04`；DM4310 使用 MIT 小速度，DMH6215 使用速度控制帧 `0x204` 和 `--wheel-velocity`。
+- `group zero`：对 4 个电机一起发送零输出命令，用于验证多电机命令路径和总线写入顺序；DMH6215 使用速度 `0.0`。
+- `group conservative-test`：按保守参数对 4 个电机一起发送短时命令；DM4310 使用零位置/零速度/低增益 MIT 命令，DMH6215 使用速度 `0.0`，不向速度模式电机发送 torque 帧。
 - `imu read`：读取并打印 IMU 相关 CAN 帧。
 
 ## 3. Project Structure
@@ -68,10 +66,7 @@ control/
   devices.py               # 设备表：CAN_ID、MST_ID、控制模式
   safety.py                # 限幅、duration、超时策略
   damiao_protocol.py       # 达妙电机/IMU 帧编码解码
-  slcan.py                 # Python 侧薄封装
-  native/
-    slcan_bus.cpp          # C++ SLCAN 串口/CAN 帧收发实现
-    bindings.cpp           # pybind11 绑定，如果采用扩展方案
+  damiao_usbcan.py         # 达妙 USB-CAN 虚拟串口二进制协议封装
 
 tests/
   test_damiao_protocol.py
@@ -82,7 +77,7 @@ tests/
 结构原则：
 
 - Python 负责用户入口、设备配置、参数校验、安全限幅和协议组织。
-- C++ 只负责底层 SLCAN 串口连接、CAN 帧读写和必要的超时处理。
+- `control/damiao_usbcan.py` 负责达妙 USB-CAN 虚拟串口二进制协议、CAN 帧读写和必要的超时处理。
 - 设备 CAN_ID/MST_ID 不散落在命令实现里，统一放在设备表。
 - 多电机联动命令应复用单电机协议编码和安全校验，不单独维护另一套参数规则。
 - 协议编码解码应可脱离硬件进行单元测试。
@@ -97,13 +92,12 @@ Python：
 - 协议编码、限幅、设备表应写成小函数或 dataclass，避免全局可变状态。
 - 不为未来 ROS、仿真或复杂控制器预留抽象，等实际需要再加。
 
-C++：
+达妙 USB-CAN 虚拟串口：
 
-- 使用 C++17 或更新版本。
-- RAII 管理串口文件描述符。
+- 默认串口波特率为 `921600`，CAN bitrate 为 `1000000`。
+- 二进制协议封装参考达妙 ROS1 例程。
 - 读写函数必须支持 timeout，不能无限阻塞。
-- 对串口 open/config/read/write 的系统调用错误返回清晰异常或错误码。
-- 不在 C++ 层实现高层电机安全策略，避免 Python 和 C++ 双处规则不一致。
+- 对串口 open/config/read/write 的错误返回清晰异常或错误码。
 
 协议与命名：
 
@@ -121,7 +115,7 @@ C++：
 
 - 达妙电机 enable/disable 帧编码。
 - MIT 控制帧编码的边界值与限幅行为。
-- 力矩模式控制帧编码的边界值与限幅行为。
+- 速度模式控制帧编码的边界值与限幅行为。
 - 多电机 group 命令生成的帧数量、顺序、设备 ID 和保守参数。
 - 设备表是否与 [CLAUDE.md](CLAUDE.md) 中 CAN 配置一致。
 - duration、torque、position、velocity、kp、kd 等用户输入的安全校验。
@@ -138,7 +132,7 @@ uv run pytest
 
 - `list-ports` 能列出 macOS 串口。
 - `sniff` 对不存在串口给出明确错误。
-- C++ SLCAN open timeout/read timeout 行为可控。
+- 达妙 USB-CAN 虚拟串口 open timeout/read timeout 行为可控。
 
 ### 5.3 实机冒烟测试
 
@@ -147,7 +141,7 @@ uv run pytest
 1. `list-ports` 找到 USB-CAN 串口。
 2. `sniff` 能看到总线帧或至少能稳定打开设备。
 3. 对单个电机执行 `enable`，观察是否有响应帧。
-4. 对单个力矩电机执行小力矩短时 `torque --torque 0.05 --duration 0.5`。
+4. 执行 `pair conservative-spin --wheel-velocity 0.2 --duration 0.5`，确认 0x04 按速度模式接收保守速度命令。
 5. 执行 `group zero --duration 1.0`，确认 4 个电机可以一起接收零输出命令。
 6. 执行 `group conservative-test --duration 0.5`，确认多电机联动路径可用但不使用激进参数。
 7. 执行 `disable`，确认命令退出时不会保持非零输出。
@@ -187,6 +181,5 @@ uv run pytest
 
 ## Open Questions
 
-- 当前 USB-CAN 的 SLCAN bitrate 配置命令是否标准，例如 `S8`/`O`/`C`，需要用实机确认。
+- 达妙 USB-CAN 虚拟串口二进制协议封装以 ROS1 例程为参考，需要用实机确认完整收发细节。
 - 达妙 IMU 帧格式是否已有官方文档或现成解析逻辑；若没有，第一版先打印原始帧。
-- C++ 到 Python 的绑定方式最终采用 `pybind11` 还是 C++ CLI/动态库包装，需要根据当前构建复杂度决定。

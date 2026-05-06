@@ -49,8 +49,6 @@ def test_extract_sim_state_returns_finite_controller_state(tmp_path):
     assert set(state.wheel_velocities) == {"left", "right"}
     assert set(state.leg_joint_positions) == {
         "robot_base_link_r1",
-        "robot_base_link_r2",
-        "robot_base_link_r4",
         "robot_base_link_r9",
     }
     assert state.contact_count >= 0

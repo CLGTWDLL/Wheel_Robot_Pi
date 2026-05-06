@@ -16,6 +16,7 @@ decode_feedback_frame = protocol_module.decode_feedback_frame
 disable_frame = protocol_module.disable_frame
 enable_frame = protocol_module.enable_frame
 float_to_uint = protocol_module.float_to_uint
+standard_disable_frame = protocol_module.standard_disable_frame
 get_motor = motors_module.get_motor
 group_zero_frames = commands_module.group_zero_frames
 mit_frame = protocol_module.mit_frame
@@ -52,6 +53,13 @@ def test_enable_disable_frames_use_standard_command_payloads():
     assert enable_frame(motor).arbitration_id == motor.can_id
     assert enable_frame(motor).data == b"\xff\xff\xff\xff\xff\xff\xff\xfc"
     assert disable_frame(motor).data == b"\xff\xff\xff\xff\xff\xff\xff\xfd"
+
+
+def test_standard_disable_frame_uses_requested_can_id():
+    frame = standard_disable_frame(0x10)
+
+    assert frame.arbitration_id == 0x10
+    assert frame.data == b"\xff\xff\xff\xff\xff\xff\xff\xfd"
 
 
 def test_clear_error_frame_uses_standard_command_payload():
@@ -212,6 +220,6 @@ def test_uint_to_float_maps_endpoints():
 def test_group_zero_order_and_no_zero_position_command():
     frames = group_zero_frames()
 
-    assert [frame.arbitration_id for frame in frames] == [0x02, 0x03, 0x604, 0x605]
+    assert [frame.arbitration_id for frame in frames] == [0x02, 0x03, 0x204, 0x205]
     assert all(frame.data[-1] != 0xFE for frame in frames)
     assert all(frame.data != b"\xff\xff\xff\xff\xff\xff\xff\xfe" for frame in frames)

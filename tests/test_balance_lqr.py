@@ -48,6 +48,14 @@ def test_balance_state_selection_matches_sim_state_pitch_sign(tmp_path):
     assert selection[0, addresses.root_qvel + 4] == -1.0
     assert selection[1, model.nv + addresses.root_qvel + 4] == -1.0
 
+    # 轮子行使用 WHEEL_FORWARD_SIGNS: 左轮 +0.5, 右轮 -0.5
+    from sim.model_semantics import WHEEL_FORWARD_SIGNS, MODEL_SEMANTICS
+    for name in MODEL_SEMANTICS.wheel_joints:
+        dof = addresses.joint_qvel[name]
+        expected_sign = WHEEL_FORWARD_SIGNS[name] / 2.0
+        assert selection[2, dof] == expected_sign, f"P[2, {name}] = {selection[2, dof]}, expected {expected_sign}"
+        assert selection[3, model.nv + dof] == expected_sign, f"P[3, {name}] = {selection[3, model.nv + dof]}, expected {expected_sign}"
+
 
 @pytest.mark.parametrize(
     ("q_diag", "r_diag"),

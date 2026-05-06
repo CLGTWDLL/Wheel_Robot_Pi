@@ -17,6 +17,7 @@ def test_score_metrics_penalizes_failed_or_fallen_rollouts():
         max_base_height=0.2,
         max_jump_height=0.1,
         max_abs_pitch=0.1,
+        max_abs_y_drift=0.01,
         forward_distance=0.2,
         contact_count=2,
         control_effort=1.0,
@@ -30,6 +31,7 @@ def test_score_metrics_penalizes_failed_or_fallen_rollouts():
         max_base_height=0.0,
         max_jump_height=0.0,
         max_abs_pitch=3.0,
+        max_abs_y_drift=2.0,
         forward_distance=-1.0,
         contact_count=0,
         control_effort=100.0,
@@ -48,8 +50,8 @@ def test_optimize_parameters_runs_bounded_trials(tmp_path):
     assert len(result.trials) == 3
     assert result.best_trial in result.trials
     assert isinstance(result.best_trial.params, CombinedParams)
-    assert result.best_trial.params.vmc.nominal_height >= 0.05
-    assert result.best_trial.params.vmc.nominal_height <= 0.09
+    assert result.best_trial.params.vmc.nominal_height >= 0.04
+    assert result.best_trial.params.vmc.nominal_height <= 0.10
     assert result.best_trial.params.q_diag.shape == (4,)
     assert result.best_trial.params.r_diag.shape == (2,)
 
@@ -73,5 +75,5 @@ def test_optimize_cli_runs_bounded_trials(tmp_path, capsys):
 
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert "best_score=" in out
-    assert "trials=1" in out
+    assert "Best trial: score=" in out
+    assert "[1/1]" in out

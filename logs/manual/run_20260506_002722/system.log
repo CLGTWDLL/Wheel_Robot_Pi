@@ -1,0 +1,6 @@
+2026-05-06 00:27:22,286 - 47619 - INFO - ==================================================
+2026-05-06 00:27:22,286 - 47619 - INFO - Starting launch_mujoco in mode: controlled
+2026-05-06 00:27:22,286 - 47619 - INFO - Scenario: stand, Controller: lqr_vmc
+2026-05-06 00:27:22,286 - 47619 - INFO - XML Path: /Users/cqc/wheel_robot/sim/轮腿v1/轮腿v1.xml
+2026-05-06 00:27:22,857 - 47619 - INFO - Model built and controller created. Starting simulation loop.
+2026-05-06 00:30:40,762 - 47619 - INFO - Simulation finished. Logs saved.

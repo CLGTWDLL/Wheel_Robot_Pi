@@ -5,13 +5,13 @@
 - [x] Task 1: 对齐设备表与硬件配置
   - [x] 添加/确认 `dm_imu`
   - [x] 确认 DM4310 左右为 MIT
-  - [x] 修正 DMH6215 左右为 torque
+  - [x] 修正 DMH6215 左右为 velocity
   - [x] 添加设备表测试
   - [x] 运行 `uv run pytest tests/test_devices.py`
 
 - [x] Task 2: 补齐协议 command builders
   - [x] 复用 enable/disable/MIT 编码
-  - [x] 增加 DMH6215 torque frame
+  - [x] 使用 DMH6215 velocity frame
   - [x] 增加 group zero frame builder
   - [x] 测试 group zero 不产生 `0xFE`
   - [x] 运行 `uv run pytest tests/test_damiao_protocol.py`
@@ -36,14 +36,15 @@
   - [x] `group zero` 确认不是设零点
   - [x] conservative 参数已硬限制
 
-## Phase 2: Local macOS Serial/CAN Backend
+## Phase 2: Local macOS Damiao USB-CAN Backend
 
-- [x] Task 5: 实现 macOS C++ 串口/CAN backend（离线实现）
-  - [x] 使用 macOS POSIX/termios
+- [x] Task 5: 实现 macOS 达妙 USB-CAN 虚拟串口 backend（离线实现）
+  - [x] Python 主入口通过 `control/damiao_usbcan.py`
+  - [x] 默认串口波特率 `921600`，CAN bitrate `1000000`
   - [x] open/read/write/close 有错误处理和 timeout
   - [x] 暴露统一 Python bus 接口
-  - [ ] 实机确认 USB-CAN 是标准 SLCAN 还是达妙二进制协议
-  - [x] 运行 `uv run pytest tests/test_slcan_codec.py`
+  - [ ] 实机确认达妙二进制协议收发细节（参考 ROS1 例程）
+  - [x] 运行相关 USB-CAN codec/CLI 测试
 
 - [x] Task 6: 实现 list-ports 与 sniff CLI
   - [x] `list-ports` 列出 `/dev/cu.*` 和 `/dev/tty.*`
@@ -54,7 +55,7 @@
 - [ ] Checkpoint B: Local Serial Ready
   - [ ] 找到 USB-CAN 串口
   - [x] nonexistent port 不 hang
-  - [ ] 确认真实串口协议
+  - [ ] 确认达妙二进制协议收发细节
   - [x] 未发送任何非零电机输出
 
 ## Phase 3: Single Device Hardware Slice
@@ -64,12 +65,12 @@
   - [ ] 实机单电机 enable 后立即 disable
   - [ ] 记录反馈或 timeout
 
-- [x] Task 8: 单个 DMH6215 保守 torque 测试（离线/fake 验证）
+- [x] Task 8: DMH6215 速度模式保守测试（离线/fake 验证）
   - [x] 只允许 `dmh6215_left/right`
-  - [x] 默认 torque 建议 `0.02 N·m`，不超过 `0.05 N·m`
+  - [x] 使用速度模式零输出或保守小速度，不发送 torque 帧
   - [x] duration 不超过 `0.5 s`
   - [x] 异常路径发送零输出
-  - [ ] 实机先跑 `--torque 0.02 --duration 0.3`
+  - [ ] 实机先跑 `--wheel-velocity 0.2 --duration 0.3`
 
 - [x] Task 9: IMU raw read（离线/fake 验证）
   - [x] duration 到时退出
@@ -79,7 +80,7 @@
 - [ ] Checkpoint C: Single Device Hardware Ready
   - [ ] sniff 稳定
   - [ ] enable/disable 可用
-  - [ ] 单 DMH6215 小 torque 安全退出
+  - [ ] 单 DMH6215 速度模式安全退出
   - [ ] IMU read 能运行到 duration 结束
 
 ## Phase 4: Four-Motor Vertical Slice
@@ -101,7 +102,7 @@
   - [x] 内置 pre-zero
   - [x] 默认 duration 不超过 `0.5 s`
   - [x] DM4310 不默认拉绝对 0 位
-  - [x] DMH6215 不超过 torque 上限
+  - [x] DMH6215 不发送 torque 帧
   - [x] 结束/异常都发送 group zero
   - [x] 不自动提高参数
 

@@ -1,0 +1,213 @@
+2026-05-05 23:56:13,311 - 46747 - INFO - ============================================================
+2026-05-05 23:56:13,311 - 46747 - INFO - Starting parameter optimization: 300 trials, scenario: stand
+2026-05-05 23:56:13,946 - 46755 - INFO - [Worker PID: 46755] Trial 1: score=-314.3026 status=FAIL (ParseXML: empty file '/Users/cqc/wheel_robot/tmp/mujoco_cache/轮腿v1_controlled.xml') pitch=0.0000 dist=0.000 jump=0.0000
+2026-05-05 23:56:16,291 - 46755 - INFO - [Worker PID: 46755] Trial 4: score=-1325.0849 status=FAIL (excessive_pitch) pitch=1.5135 dist=0.146 jump=0.2317
+2026-05-05 23:56:17,092 - 46757 - INFO - [Worker PID: 46757] Trial 3: score=-2556.7611 status=FAIL (excessive_pitch) pitch=1.5005 dist=-0.341 jump=0.2709
+2026-05-05 23:56:17,324 - 46756 - INFO - [Worker PID: 46756] Trial 2: score=-2166.8735 status=FAIL (excessive_pitch) pitch=1.5001 dist=0.317 jump=0.1726
+2026-05-05 23:56:19,036 - 46757 - INFO - [Worker PID: 46757] Trial 6: score=-1329.9447 status=FAIL (excessive_pitch) pitch=1.5001 dist=-0.339 jump=0.1959
+2026-05-05 23:56:19,244 - 46755 - INFO - [Worker PID: 46755] Trial 5: score=-2587.8865 status=FAIL (excessive_pitch) pitch=1.5019 dist=0.438 jump=0.1973
+2026-05-05 23:56:20,259 - 46754 - INFO - [Worker PID: 46754] Trial 0: score=-845.3282 status=OK pitch=0.4659 dist=0.199 jump=0.0732
+2026-05-05 23:56:21,322 - 46755 - INFO - [Worker PID: 46755] Trial 9: score=-617.5476 status=FAIL (excessive_pitch) pitch=1.5001 dist=-0.059 jump=0.1688
+2026-05-05 23:56:23,088 - 46755 - INFO - [Worker PID: 46755] Trial 11: score=-1343.2198 status=FAIL (excessive_pitch) pitch=1.5014 dist=-0.165 jump=0.1811
+2026-05-05 23:56:23,194 - 46756 - INFO - [Worker PID: 46756] Trial 7: score=-288.0982 status=OK pitch=0.4950 dist=0.101 jump=0.0788
+2026-05-05 23:56:23,966 - 46755 - INFO - [Worker PID: 46755] Trial 12: score=-769.5359 status=FAIL (excessive_pitch) pitch=1.5049 dist=-0.266 jump=0.2594
+2026-05-05 23:56:24,450 - 46757 - INFO - [Worker PID: 46757] Trial 8: score=-5016.9014 status=OK pitch=0.8524 dist=0.159 jump=0.1492
+2026-05-05 23:56:25,246 - 46756 - INFO - [Worker PID: 46756] Trial 13: score=-2524.0486 status=FAIL (excessive_pitch) pitch=1.5030 dist=0.790 jump=0.2251
+2026-05-05 23:56:25,584 - 46757 - INFO - [Worker PID: 46757] Trial 15: score=-536.1988 status=FAIL (excessive_pitch) pitch=1.5009 dist=-0.057 jump=0.1693
+2026-05-05 23:56:25,760 - 46754 - INFO - [Worker PID: 46754] Trial 10: score=-506.1398 status=OK pitch=0.2557 dist=-0.041 jump=0.0308
+2026-05-05 23:56:26,417 - 46756 - INFO - [Worker PID: 46756] Trial 16: score=-558.5763 status=FAIL (excessive_pitch) pitch=1.5004 dist=-0.101 jump=0.1710
+2026-05-05 23:56:27,814 - 46756 - INFO - [Worker PID: 46756] Trial 19: score=-659.3401 status=FAIL (excessive_pitch) pitch=1.5045 dist=-0.041 jump=0.1867
+2026-05-05 23:56:28,031 - 46757 - INFO - [Worker PID: 46757] Trial 17: score=-1312.0866 status=FAIL (excessive_pitch) pitch=1.5023 dist=-0.021 jump=0.1903
+2026-05-05 23:56:28,818 - 46755 - INFO - [Worker PID: 46755] Trial 14: score=-1481.3352 status=OK pitch=0.5979 dist=0.140 jump=0.1041
+2026-05-05 23:56:29,562 - 46754 - INFO - [Worker PID: 46754] Trial 18: score=-2324.3089 status=FAIL (excessive_pitch) pitch=1.5016 dist=0.389 jump=0.2061
+2026-05-05 23:56:32,517 - 46756 - INFO - [Worker PID: 46756] Trial 20: score=-912.4970 status=OK pitch=0.6178 dist=0.169 jump=0.0883
+2026-05-05 23:56:33,233 - 46757 - INFO - [Worker PID: 46757] Trial 21: score=-1004.8318 status=OK pitch=0.5295 dist=0.177 jump=0.0911
+2026-05-05 23:56:34,078 - 46755 - INFO - [Worker PID: 46755] Trial 22: score=-895.6122 status=OK pitch=0.5660 dist=0.198 jump=0.0772
+2026-05-05 23:56:34,884 - 46754 - INFO - [Worker PID: 46754] Trial 23: score=-816.6265 status=OK pitch=0.5343 dist=0.159 jump=0.0731
+2026-05-05 23:56:37,655 - 46756 - INFO - [Worker PID: 46756] Trial 24: score=-498.5981 status=OK pitch=0.2649 dist=-0.039 jump=0.0330
+2026-05-05 23:56:38,221 - 46757 - INFO - [Worker PID: 46757] Trial 25: score=-728.5192 status=OK pitch=0.2534 dist=0.007 jump=0.0347
+2026-05-05 23:56:39,270 - 46755 - INFO - [Worker PID: 46755] Trial 26: score=-782.0253 status=OK pitch=0.2639 dist=0.005 jump=0.0338
+2026-05-05 23:56:40,118 - 46754 - INFO - [Worker PID: 46754] Trial 27: score=-555.8931 status=OK pitch=0.2639 dist=-0.014 jump=0.0334
+2026-05-05 23:56:42,930 - 46756 - INFO - [Worker PID: 46756] Trial 28: score=-1016.5963 status=OK pitch=0.2678 dist=0.069 jump=0.0382
+2026-05-05 23:56:43,590 - 46757 - INFO - [Worker PID: 46757] Trial 29: score=-231.9959 status=OK pitch=0.3358 dist=0.013 jump=0.0447
+2026-05-05 23:56:44,636 - 46756 - INFO - [Worker PID: 46756] Trial 32: score=-1008.7749 status=FAIL (excessive_pitch) pitch=1.5008 dist=0.073 jump=0.1787
+2026-05-05 23:56:44,646 - 46755 - INFO - [Worker PID: 46755] Trial 30: score=-1957.5233 status=OK pitch=0.7596 dist=-0.049 jump=0.1342
+2026-05-05 23:56:45,499 - 46754 - INFO - [Worker PID: 46754] Trial 31: score=-4954.5962 status=OK pitch=0.5507 dist=0.199 jump=0.0853
+2026-05-05 23:56:47,146 - 46754 - INFO - [Worker PID: 46754] Trial 36: score=-1348.4301 status=FAIL (excessive_pitch) pitch=1.5012 dist=0.041 jump=0.2035
+2026-05-05 23:56:48,997 - 46757 - INFO - [Worker PID: 46757] Trial 33: score=-4975.5874 status=OK pitch=0.5647 dist=0.271 jump=0.0965
+2026-05-05 23:56:50,357 - 46756 - INFO - [Worker PID: 46756] Trial 34: score=-3643.9838 status=OK pitch=0.9463 dist=0.379 jump=0.1746
+2026-05-05 23:56:50,584 - 46755 - INFO - [Worker PID: 46755] Trial 35: score=-4668.4772 status=OK pitch=0.5338 dist=-0.065 jump=0.0740
+2026-05-05 23:56:51,936 - 46757 - INFO - [Worker PID: 46757] Trial 38: score=-2321.0441 status=FAIL (excessive_pitch) pitch=1.5100 dist=0.009 jump=0.1852
+2026-05-05 23:56:52,620 - 46754 - INFO - [Worker PID: 46754] Trial 37: score=-605.7676 status=OK pitch=0.5518 dist=-0.024 jump=0.0834
+2026-05-05 23:56:52,999 - 46755 - INFO - [Worker PID: 46755] Trial 40: score=-1262.4927 status=FAIL (excessive_pitch) pitch=1.5004 dist=-0.259 jump=0.2120
+2026-05-05 23:56:53,547 - 46757 - INFO - [Worker PID: 46757] Trial 41: score=-769.0583 status=FAIL (excessive_pitch) pitch=1.5020 dist=0.101 jump=0.1753
+2026-05-05 23:56:54,065 - 46754 - INFO - [Worker PID: 46754] Trial 42: score=-687.3851 status=FAIL (excessive_pitch) pitch=1.5008 dist=0.044 jump=0.2412
+2026-05-05 23:56:54,892 - 46755 - INFO - [Worker PID: 46755] Trial 43: score=-1012.6138 status=FAIL (excessive_pitch) pitch=1.5000 dist=0.090 jump=0.2116
+2026-05-05 23:56:56,626 - 46756 - INFO - [Worker PID: 46756] Trial 39: score=-3728.2153 status=OK pitch=1.0557 dist=0.125 jump=0.1841
+2026-05-05 23:56:59,827 - 46757 - INFO - [Worker PID: 46757] Trial 44: score=-644.8795 status=OK pitch=0.2445 dist=0.102 jump=0.0308
+2026-05-05 23:56:59,930 - 46754 - INFO - [Worker PID: 46754] Trial 45: score=-536.1851 status=OK pitch=0.2512 dist=-0.015 jump=0.0307
+2026-05-05 23:57:00,583 - 46755 - INFO - [Worker PID: 46755] Trial 46: score=-471.5485 status=OK pitch=0.2533 dist=0.011 jump=0.0309
+2026-05-05 23:57:02,004 - 46754 - INFO - [Worker PID: 46754] Trial 49: score=-1102.9366 status=FAIL (excessive_pitch) pitch=1.5049 dist=-0.408 jump=0.2247
+2026-05-05 23:57:02,208 - 46756 - INFO - [Worker PID: 46756] Trial 47: score=-476.3034 status=OK pitch=0.2507 dist=-0.033 jump=0.0308
+2026-05-05 23:57:06,264 - 46757 - INFO - [Worker PID: 46757] Trial 48: score=-1326.5279 status=OK pitch=0.6848 dist=-0.090 jump=0.1225
+2026-05-05 23:57:07,068 - 46755 - INFO - [Worker PID: 46755] Trial 50: score=-394.9630 status=OK pitch=0.5502 dist=0.014 jump=0.0913
+2026-05-05 23:57:07,995 - 46754 - INFO - [Worker PID: 46754] Trial 51: score=-789.7249 status=OK pitch=0.4862 dist=-0.011 jump=0.0719
+2026-05-05 23:57:08,485 - 46756 - INFO - [Worker PID: 46756] Trial 52: score=-312.0455 status=OK pitch=0.4917 dist=0.055 jump=0.0693
+2026-05-05 23:57:12,521 - 46757 - INFO - [Worker PID: 46757] Trial 53: score=-296.4146 status=OK pitch=0.5019 dist=0.121 jump=0.0727
+2026-05-05 23:57:13,147 - 46755 - INFO - [Worker PID: 46755] Trial 54: score=-291.1879 status=OK pitch=0.2504 dist=0.078 jump=0.0369
+2026-05-05 23:57:14,056 - 46754 - INFO - [Worker PID: 46754] Trial 55: score=-993.7969 status=OK pitch=0.7268 dist=0.189 jump=0.1248
+2026-05-05 23:57:14,726 - 46756 - INFO - [Worker PID: 46756] Trial 56: score=-162.6690 status=OK pitch=0.4603 dist=0.078 jump=0.0658
+2026-05-05 23:57:18,695 - 46757 - INFO - [Worker PID: 46757] Trial 57: score=-405.6100 status=OK pitch=0.6097 dist=0.030 jump=0.1061
+2026-05-05 23:57:19,530 - 46755 - INFO - [Worker PID: 46755] Trial 58: score=-437.8773 status=OK pitch=0.6267 dist=0.173 jump=0.1096
+2026-05-05 23:57:20,672 - 46754 - INFO - [Worker PID: 46754] Trial 59: score=-447.7698 status=OK pitch=0.5804 dist=0.174 jump=0.0985
+2026-05-05 23:57:21,443 - 46756 - INFO - [Worker PID: 46756] Trial 60: score=-431.4667 status=OK pitch=0.7770 dist=0.171 jump=0.1329
+2026-05-05 23:57:23,398 - 46756 - INFO - [Worker PID: 46756] Trial 64: score=-442.8570 status=FAIL (excessive_pitch) pitch=1.5016 dist=0.049 jump=0.2878
+2026-05-05 23:57:26,102 - 46757 - INFO - [Worker PID: 46757] Trial 61: score=-268.9535 status=OK pitch=0.5061 dist=0.058 jump=0.0736
+2026-05-05 23:57:26,991 - 46755 - INFO - [Worker PID: 46755] Trial 62: score=-521.8729 status=OK pitch=0.5399 dist=0.032 jump=0.0971
+2026-05-05 23:57:27,901 - 46754 - INFO - [Worker PID: 46754] Trial 63: score=-238.9820 status=OK pitch=0.5940 dist=0.045 jump=0.0867
+2026-05-05 23:57:29,868 - 46756 - INFO - [Worker PID: 46756] Trial 65: score=-170.3721 status=OK pitch=0.4898 dist=0.033 jump=0.0691
+2026-05-05 23:57:30,357 - 46754 - INFO - [Worker PID: 46754] Trial 68: score=-1028.9909 status=FAIL (excessive_pitch) pitch=1.5064 dist=0.942 jump=0.2145
+2026-05-05 23:57:31,978 - 46756 - INFO - [Worker PID: 46756] Trial 69: score=-536.0112 status=FAIL (excessive_pitch) pitch=1.5024 dist=0.204 jump=0.1762
+2026-05-05 23:57:33,600 - 46757 - INFO - [Worker PID: 46757] Trial 66: score=-315.1572 status=OK pitch=0.7923 dist=0.093 jump=0.1325
+2026-05-05 23:57:34,764 - 46755 - INFO - [Worker PID: 46755] Trial 67: score=-304.7259 status=OK pitch=0.5088 dist=0.071 jump=0.0742
+2026-05-05 23:57:38,203 - 46754 - INFO - [Worker PID: 46754] Trial 70: score=-184.8048 status=OK pitch=0.4949 dist=0.084 jump=0.0910
+2026-05-05 23:57:39,542 - 46756 - INFO - [Worker PID: 46756] Trial 71: score=-220.1311 status=OK pitch=0.4850 dist=0.057 jump=0.0700
+2026-05-05 23:57:41,312 - 46757 - INFO - [Worker PID: 46757] Trial 72: score=-287.7122 status=OK pitch=0.6482 dist=0.075 jump=0.1146
+2026-05-05 23:57:42,831 - 46755 - INFO - [Worker PID: 46755] Trial 73: score=-279.6653 status=OK pitch=0.4787 dist=0.018 jump=0.0730
+2026-05-05 23:57:46,592 - 46754 - INFO - [Worker PID: 46754] Trial 74: score=-112.5733 status=OK pitch=0.5174 dist=0.068 jump=0.0737
+2026-05-05 23:57:48,319 - 46756 - INFO - [Worker PID: 46756] Trial 75: score=-887.3560 status=OK pitch=0.7812 dist=-0.187 jump=0.1433
+2026-05-05 23:57:49,966 - 46757 - INFO - [Worker PID: 46757] Trial 76: score=-108.3178 status=OK pitch=0.5180 dist=0.069 jump=0.0738
+2026-05-05 23:57:51,558 - 46755 - INFO - [Worker PID: 46755] Trial 77: score=-169.2643 status=OK pitch=0.4811 dist=0.071 jump=0.0716
+2026-05-05 23:57:55,435 - 46754 - INFO - [Worker PID: 46754] Trial 78: score=-232.8345 status=OK pitch=0.5351 dist=0.278 jump=0.0873
+2026-05-05 23:57:56,552 - 46756 - INFO - [Worker PID: 46756] Trial 79: score=-121.4580 status=OK pitch=0.4802 dist=0.031 jump=0.0717
+2026-05-05 23:57:58,234 - 46757 - INFO - [Worker PID: 46757] Trial 80: score=-259.8997 status=OK pitch=0.9018 dist=0.115 jump=0.1462
+2026-05-05 23:57:59,927 - 46755 - INFO - [Worker PID: 46755] Trial 81: score=-269.3303 status=OK pitch=0.7955 dist=0.090 jump=0.1373
+2026-05-05 23:58:04,401 - 46754 - INFO - [Worker PID: 46754] Trial 82: score=-165.0283 status=OK pitch=0.4582 dist=0.078 jump=0.0654
+2026-05-05 23:58:05,513 - 46756 - INFO - [Worker PID: 46756] Trial 83: score=-150.5094 status=OK pitch=0.4842 dist=0.122 jump=0.0692
+2026-05-05 23:58:07,570 - 46757 - INFO - [Worker PID: 46757] Trial 84: score=-102.6593 status=OK pitch=0.4814 dist=0.021 jump=0.0693
+2026-05-05 23:58:09,441 - 46755 - INFO - [Worker PID: 46755] Trial 85: score=-195.7205 status=OK pitch=0.4848 dist=0.040 jump=0.0716
+2026-05-05 23:58:14,031 - 46754 - INFO - [Worker PID: 46754] Trial 86: score=-214.4207 status=OK pitch=0.4850 dist=0.028 jump=0.0714
+2026-05-05 23:58:15,458 - 46756 - INFO - [Worker PID: 46756] Trial 87: score=-133.4448 status=OK pitch=0.4793 dist=0.103 jump=0.0694
+2026-05-05 23:58:17,374 - 46757 - INFO - [Worker PID: 46757] Trial 88: score=-201.3716 status=OK pitch=0.5673 dist=-0.036 jump=0.0964
+2026-05-05 23:58:19,170 - 46755 - INFO - [Worker PID: 46755] Trial 89: score=-251.2360 status=OK pitch=0.4532 dist=0.063 jump=0.0667
+2026-05-05 23:58:23,927 - 46754 - INFO - [Worker PID: 46754] Trial 90: score=-250.2500 status=OK pitch=0.4548 dist=0.057 jump=0.0665
+2026-05-05 23:58:25,260 - 46756 - INFO - [Worker PID: 46756] Trial 91: score=-178.5528 status=OK pitch=0.6325 dist=-0.019 jump=0.1073
+2026-05-05 23:58:27,297 - 46757 - INFO - [Worker PID: 46757] Trial 92: score=-183.9404 status=OK pitch=0.4520 dist=0.072 jump=0.0656
+2026-05-05 23:58:28,689 - 46755 - INFO - [Worker PID: 46755] Trial 93: score=-287.2476 status=OK pitch=0.4691 dist=0.089 jump=0.0656
+2026-05-05 23:58:32,713 - 46754 - INFO - [Worker PID: 46754] Trial 94: score=-127.3380 status=OK pitch=0.4758 dist=0.054 jump=0.0695
+2026-05-05 23:58:33,490 - 46756 - INFO - [Worker PID: 46756] Trial 95: score=-127.1568 status=OK pitch=0.4801 dist=0.098 jump=0.0694
+2026-05-05 23:58:35,290 - 46757 - INFO - [Worker PID: 46757] Trial 96: score=-168.5829 status=OK pitch=0.4701 dist=0.136 jump=0.0661
+2026-05-05 23:58:36,652 - 46755 - INFO - [Worker PID: 46755] Trial 97: score=-154.8297 status=OK pitch=0.4803 dist=0.111 jump=0.0692
+2026-05-05 23:58:40,814 - 46754 - INFO - [Worker PID: 46754] Trial 98: score=-114.7851 status=OK pitch=0.5565 dist=0.073 jump=0.0840
+2026-05-05 23:58:41,389 - 46756 - INFO - [Worker PID: 46756] Trial 99: score=-145.0958 status=OK pitch=0.4585 dist=0.077 jump=0.0657
+2026-05-05 23:58:42,836 - 46757 - INFO - [Worker PID: 46757] Trial 100: score=-1079.2109 status=OK pitch=1.4797 dist=-0.060 jump=0.1677
+2026-05-05 23:58:44,166 - 46755 - INFO - [Worker PID: 46755] Trial 101: score=-351.1622 status=OK pitch=0.7624 dist=0.111 jump=0.1304
+2026-05-05 23:58:48,636 - 46754 - INFO - [Worker PID: 46754] Trial 102: score=-284.4214 status=OK pitch=0.8038 dist=0.040 jump=0.1355
+2026-05-05 23:58:49,484 - 46756 - INFO - [Worker PID: 46756] Trial 103: score=-142.2669 status=OK pitch=0.4586 dist=0.065 jump=0.0660
+2026-05-05 23:58:50,804 - 46757 - INFO - [Worker PID: 46757] Trial 104: score=-241.7704 status=OK pitch=0.7858 dist=0.050 jump=0.1334
+2026-05-05 23:58:52,619 - 46755 - INFO - [Worker PID: 46755] Trial 105: score=-139.9415 status=OK pitch=0.5987 dist=0.103 jump=0.0919
+2026-05-05 23:58:56,847 - 46754 - INFO - [Worker PID: 46754] Trial 106: score=-278.9404 status=OK pitch=0.8902 dist=0.078 jump=0.1501
+2026-05-05 23:58:57,690 - 46756 - INFO - [Worker PID: 46756] Trial 107: score=-169.9491 status=OK pitch=0.6329 dist=-0.090 jump=0.1085
+2026-05-05 23:58:58,714 - 46757 - INFO - [Worker PID: 46757] Trial 108: score=-142.8958 status=OK pitch=0.4374 dist=0.062 jump=0.0616
+2026-05-05 23:59:00,123 - 46755 - INFO - [Worker PID: 46755] Trial 109: score=-126.4573 status=OK pitch=0.4613 dist=0.092 jump=0.0641
+2026-05-05 23:59:04,535 - 46754 - INFO - [Worker PID: 46754] Trial 110: score=-163.1945 status=OK pitch=0.4313 dist=0.097 jump=0.0626
+2026-05-05 23:59:05,431 - 46756 - INFO - [Worker PID: 46756] Trial 111: score=-278.8633 status=OK pitch=0.4422 dist=0.062 jump=0.0633
+2026-05-05 23:59:06,521 - 46757 - INFO - [Worker PID: 46757] Trial 112: score=-239.9579 status=OK pitch=0.4407 dist=-0.012 jump=0.0628
+2026-05-05 23:59:07,491 - 46756 - INFO - [Worker PID: 46756] Trial 115: score=-665.7937 status=FAIL (excessive_pitch) pitch=1.5003 dist=-0.215 jump=0.1760
+2026-05-05 23:59:08,228 - 46755 - INFO - [Worker PID: 46755] Trial 113: score=-134.0177 status=OK pitch=0.4576 dist=0.089 jump=0.0665
+2026-05-05 23:59:09,455 - 46756 - INFO - [Worker PID: 46756] Trial 117: score=-406.3641 status=FAIL (excessive_pitch) pitch=1.5004 dist=-0.048 jump=0.1694
+2026-05-05 23:59:12,813 - 46754 - INFO - [Worker PID: 46754] Trial 114: score=-870.8010 status=OK pitch=1.0895 dist=0.304 jump=0.1889
+2026-05-05 23:59:15,931 - 46757 - INFO - [Worker PID: 46757] Trial 116: score=-134.9802 status=OK pitch=0.4571 dist=0.070 jump=0.0664
+2026-05-05 23:59:19,752 - 46755 - INFO - [Worker PID: 46755] Trial 118: score=-123.9920 status=OK pitch=0.4585 dist=0.087 jump=0.0649
+2026-05-05 23:59:21,242 - 46756 - INFO - [Worker PID: 46756] Trial 119: score=-200.8855 status=OK pitch=0.7050 dist=0.069 jump=0.1218
+2026-05-05 23:59:28,224 - 46754 - INFO - [Worker PID: 46754] Trial 120: score=-222.7290 status=OK pitch=0.7485 dist=0.063 jump=0.1279
+2026-05-05 23:59:30,374 - 46757 - INFO - [Worker PID: 46757] Trial 121: score=-276.6008 status=OK pitch=0.8679 dist=0.092 jump=0.1485
+2026-05-05 23:59:34,065 - 46755 - INFO - [Worker PID: 46755] Trial 122: score=-121.2426 status=OK pitch=0.4586 dist=0.092 jump=0.0646
+2026-05-05 23:59:34,251 - 46756 - INFO - [Worker PID: 46756] Trial 123: score=-147.8674 status=OK pitch=0.4577 dist=0.094 jump=0.0659
+2026-05-05 23:59:38,668 - 46754 - INFO - [Worker PID: 46754] Trial 124: score=-116.6762 status=OK pitch=0.4552 dist=0.043 jump=0.0661
+2026-05-05 23:59:39,955 - 46757 - INFO - [Worker PID: 46757] Trial 125: score=-125.4976 status=OK pitch=0.4584 dist=0.043 jump=0.0654
+2026-05-05 23:59:43,042 - 46755 - INFO - [Worker PID: 46755] Trial 126: score=-137.1868 status=OK pitch=0.4549 dist=0.067 jump=0.0664
+2026-05-05 23:59:43,802 - 46756 - INFO - [Worker PID: 46756] Trial 127: score=-136.4599 status=OK pitch=0.4494 dist=0.023 jump=0.0647
+2026-05-05 23:59:47,525 - 46754 - INFO - [Worker PID: 46754] Trial 128: score=-169.2589 status=OK pitch=0.4365 dist=0.055 jump=0.0625
+2026-05-05 23:59:48,719 - 46757 - INFO - [Worker PID: 46757] Trial 129: score=-115.4544 status=OK pitch=0.4576 dist=0.026 jump=0.0657
+2026-05-05 23:59:51,902 - 46755 - INFO - [Worker PID: 46755] Trial 130: score=-111.3653 status=OK pitch=0.4586 dist=0.076 jump=0.0645
+2026-05-05 23:59:53,452 - 46756 - INFO - [Worker PID: 46756] Trial 131: score=-102.2088 status=OK pitch=0.4580 dist=0.025 jump=0.0655
+2026-05-06 00:00:01,119 - 46754 - INFO - [Worker PID: 46754] Trial 132: score=-102.7835 status=OK pitch=0.5192 dist=0.021 jump=0.0762
+2026-05-06 00:00:02,283 - 46757 - INFO - [Worker PID: 46757] Trial 133: score=-109.2965 status=OK pitch=0.4611 dist=0.067 jump=0.0646
+2026-05-06 00:00:10,244 - 46755 - INFO - [Worker PID: 46755] Trial 134: score=-117.8708 status=OK pitch=0.4582 dist=0.045 jump=0.0653
+2026-05-06 00:00:11,621 - 46756 - INFO - [Worker PID: 46756] Trial 135: score=-130.1261 status=OK pitch=0.5639 dist=-0.078 jump=0.0903
+2026-05-06 00:00:20,602 - 46754 - INFO - [Worker PID: 46754] Trial 136: score=-107.2763 status=OK pitch=0.5492 dist=0.010 jump=0.0836
+2026-05-06 00:00:22,546 - 46757 - INFO - [Worker PID: 46757] Trial 137: score=-128.9824 status=OK pitch=0.5580 dist=-0.066 jump=0.0898
+2026-05-06 00:00:27,297 - 46755 - INFO - [Worker PID: 46755] Trial 138: score=-136.2037 status=OK pitch=0.6119 dist=-0.138 jump=0.1019
+2026-05-06 00:00:28,053 - 46756 - INFO - [Worker PID: 46756] Trial 139: score=-117.1272 status=OK pitch=0.5580 dist=-0.126 jump=0.0921
+2026-05-06 00:00:32,786 - 46754 - INFO - [Worker PID: 46754] Trial 140: score=-132.5311 status=OK pitch=0.5898 dist=-0.141 jump=0.1006
+2026-05-06 00:00:34,420 - 46757 - INFO - [Worker PID: 46757] Trial 141: score=-164.0687 status=OK pitch=0.4904 dist=-0.032 jump=0.0737
+2026-05-06 00:00:38,433 - 46755 - INFO - [Worker PID: 46755] Trial 142: score=-183.9330 status=OK pitch=0.7150 dist=-0.060 jump=0.1234
+2026-05-06 00:00:39,374 - 46756 - INFO - [Worker PID: 46756] Trial 143: score=-126.5814 status=OK pitch=0.5703 dist=-0.131 jump=0.0947
+2026-05-06 00:00:43,702 - 46754 - INFO - [Worker PID: 46754] Trial 144: score=-146.0878 status=OK pitch=0.5099 dist=-0.001 jump=0.0772
+2026-05-06 00:00:44,659 - 46757 - INFO - [Worker PID: 46757] Trial 145: score=-93.0114 status=OK pitch=0.4616 dist=0.142 jump=0.0654
+2026-05-06 00:00:48,156 - 46755 - INFO - [Worker PID: 46755] Trial 146: score=-157.2815 status=OK pitch=0.6446 dist=-0.034 jump=0.1113
+2026-05-06 00:00:48,983 - 46756 - INFO - [Worker PID: 46756] Trial 147: score=-80.7262 status=OK pitch=0.4886 dist=0.022 jump=0.0689
+2026-05-06 00:00:53,179 - 46754 - INFO - [Worker PID: 46754] Trial 148: score=-1394.7988 status=OK pitch=0.5103 dist=0.120 jump=0.0879
+2026-05-06 00:00:54,049 - 46757 - INFO - [Worker PID: 46757] Trial 149: score=-81.9073 status=OK pitch=0.4877 dist=0.017 jump=0.0685
+2026-05-06 00:00:58,585 - 46755 - INFO - [Worker PID: 46755] Trial 150: score=-99.4593 status=OK pitch=0.4781 dist=0.146 jump=0.0677
+2026-05-06 00:00:59,334 - 46756 - INFO - [Worker PID: 46756] Trial 151: score=-95.7037 status=OK pitch=0.4660 dist=0.119 jump=0.0653
+2026-05-06 00:01:02,585 - 46754 - INFO - [Worker PID: 46754] Trial 152: score=-81.0160 status=OK pitch=0.4842 dist=0.073 jump=0.0687
+2026-05-06 00:01:02,883 - 46757 - INFO - [Worker PID: 46757] Trial 153: score=-117.6073 status=OK pitch=0.4671 dist=0.151 jump=0.0663
+2026-05-06 00:01:06,273 - 46755 - INFO - [Worker PID: 46755] Trial 154: score=-97.7011 status=OK pitch=0.4645 dist=0.117 jump=0.0652
+2026-05-06 00:01:07,255 - 46756 - INFO - [Worker PID: 46756] Trial 155: score=-1101.1614 status=OK pitch=0.6890 dist=0.064 jump=0.1207
+2026-05-06 00:01:10,554 - 46754 - INFO - [Worker PID: 46754] Trial 156: score=-1373.5944 status=OK pitch=0.8892 dist=0.077 jump=0.1544
+2026-05-06 00:01:11,222 - 46757 - INFO - [Worker PID: 46757] Trial 157: score=-1851.3551 status=OK pitch=0.6372 dist=0.170 jump=0.1231
+2026-05-06 00:01:13,851 - 46755 - INFO - [Worker PID: 46755] Trial 158: score=-124.3612 status=OK pitch=0.4765 dist=0.082 jump=0.0665
+2026-05-06 00:01:14,953 - 46756 - INFO - [Worker PID: 46756] Trial 159: score=-92.0551 status=OK pitch=0.4597 dist=0.111 jump=0.0643
+2026-05-06 00:01:18,004 - 46754 - INFO - [Worker PID: 46754] Trial 160: score=-2011.1230 status=OK pitch=0.4730 dist=0.100 jump=0.0744
+2026-05-06 00:01:18,742 - 46757 - INFO - [Worker PID: 46757] Trial 161: score=-109.9224 status=OK pitch=0.4612 dist=0.072 jump=0.0648
+2026-05-06 00:01:22,259 - 46755 - INFO - [Worker PID: 46755] Trial 162: score=-1917.1273 status=OK pitch=0.4835 dist=0.092 jump=0.0806
+2026-05-06 00:01:23,563 - 46756 - INFO - [Worker PID: 46756] Trial 163: score=-2067.9602 status=OK pitch=0.8721 dist=0.034 jump=0.1515
+2026-05-06 00:01:28,582 - 46754 - INFO - [Worker PID: 46754] Trial 164: score=-107.9427 status=OK pitch=0.4640 dist=0.183 jump=0.0652
+2026-05-06 00:01:29,632 - 46757 - INFO - [Worker PID: 46757] Trial 165: score=-116.8743 status=OK pitch=0.4604 dist=0.048 jump=0.0644
+2026-05-06 00:01:32,691 - 46755 - INFO - [Worker PID: 46755] Trial 166: score=-104.2468 status=OK pitch=0.4582 dist=0.075 jump=0.0661
+2026-05-06 00:01:33,983 - 46756 - INFO - [Worker PID: 46756] Trial 167: score=-531.9741 status=OK pitch=0.6520 dist=-0.040 jump=0.1260
+2026-05-06 00:01:36,736 - 46754 - INFO - [Worker PID: 46754] Trial 168: score=-112.1244 status=OK pitch=0.4572 dist=0.014 jump=0.0667
+2026-05-06 00:01:37,736 - 46757 - INFO - [Worker PID: 46757] Trial 169: score=-101.8814 status=OK pitch=0.4588 dist=0.083 jump=0.0666
+2026-05-06 00:01:40,671 - 46755 - INFO - [Worker PID: 46755] Trial 170: score=-105.5581 status=OK pitch=0.4544 dist=0.072 jump=0.0666
+2026-05-06 00:01:41,374 - 46756 - INFO - [Worker PID: 46756] Trial 171: score=-106.5341 status=OK pitch=0.4591 dist=0.045 jump=0.0645
+2026-05-06 00:01:44,425 - 46754 - INFO - [Worker PID: 46754] Trial 172: score=-115.5173 status=OK pitch=0.4632 dist=0.050 jump=0.0641
+2026-05-06 00:01:45,239 - 46757 - INFO - [Worker PID: 46757] Trial 173: score=-106.9114 status=OK pitch=0.4620 dist=0.179 jump=0.0656
+2026-05-06 00:01:48,647 - 46755 - INFO - [Worker PID: 46755] Trial 174: score=-136.2248 status=OK pitch=0.4596 dist=0.076 jump=0.0658
+2026-05-06 00:01:49,270 - 46756 - INFO - [Worker PID: 46756] Trial 175: score=-102.8531 status=OK pitch=0.4615 dist=0.087 jump=0.0646
+2026-05-06 00:01:52,077 - 46754 - INFO - [Worker PID: 46754] Trial 176: score=-104.1749 status=OK pitch=0.4632 dist=0.188 jump=0.0654
+2026-05-06 00:01:52,876 - 46757 - INFO - [Worker PID: 46757] Trial 177: score=-98.9116 status=OK pitch=0.4614 dist=0.174 jump=0.0651
+2026-05-06 00:01:56,216 - 46755 - INFO - [Worker PID: 46755] Trial 178: score=-96.8418 status=OK pitch=0.4620 dist=0.175 jump=0.0654
+2026-05-06 00:01:57,011 - 46756 - INFO - [Worker PID: 46756] Trial 179: score=-189.4548 status=OK pitch=0.4606 dist=0.082 jump=0.0648
+2026-05-06 00:01:59,506 - 46754 - INFO - [Worker PID: 46754] Trial 180: score=-98.7853 status=OK pitch=0.4608 dist=0.124 jump=0.0647
+2026-05-06 00:02:00,617 - 46757 - INFO - [Worker PID: 46757] Trial 181: score=-185.8199 status=OK pitch=0.4608 dist=0.087 jump=0.0649
+2026-05-06 00:02:03,924 - 46755 - INFO - [Worker PID: 46755] Trial 182: score=-3394.3303 status=OK pitch=0.5527 dist=0.123 jump=0.0946
+2026-05-06 00:02:04,812 - 46756 - INFO - [Worker PID: 46756] Trial 183: score=-97.4903 status=OK pitch=0.4646 dist=0.116 jump=0.0654
+2026-05-06 00:02:07,378 - 46754 - INFO - [Worker PID: 46754] Trial 184: score=-103.1246 status=OK pitch=0.4668 dist=0.157 jump=0.0655
+2026-05-06 00:02:08,220 - 46757 - INFO - [Worker PID: 46757] Trial 185: score=-96.2679 status=OK pitch=0.4651 dist=0.114 jump=0.0653
+2026-05-06 00:02:11,546 - 46755 - INFO - [Worker PID: 46755] Trial 186: score=-95.3831 status=OK pitch=0.4541 dist=0.051 jump=0.0662
+2026-05-06 00:02:12,543 - 46756 - INFO - [Worker PID: 46756] Trial 187: score=-103.8245 status=OK pitch=0.4631 dist=0.094 jump=0.0652
+2026-05-06 00:02:14,376 - 46756 - INFO - [Worker PID: 46756] Trial 191: score=-567.6963 status=FAIL (excessive_pitch) pitch=1.5003 dist=-0.014 jump=0.1709
+2026-05-06 00:02:15,514 - 46754 - INFO - [Worker PID: 46754] Trial 188: score=-93.7142 status=OK pitch=0.4680 dist=0.119 jump=0.0656
+2026-05-06 00:02:16,328 - 46757 - INFO - [Worker PID: 46757] Trial 189: score=-2064.4726 status=OK pitch=0.5792 dist=0.100 jump=0.1072
+2026-05-06 00:02:19,637 - 46755 - INFO - [Worker PID: 46755] Trial 190: score=-2122.4692 status=OK pitch=0.5977 dist=0.091 jump=0.1099
+2026-05-06 00:02:21,350 - 46756 - INFO - [Worker PID: 46756] Trial 192: score=-110.5580 status=OK pitch=0.4642 dist=0.163 jump=0.0658
+2026-05-06 00:02:23,018 - 46754 - INFO - [Worker PID: 46754] Trial 193: score=-1888.9752 status=OK pitch=0.7829 dist=0.052 jump=0.1382
+2026-05-06 00:02:23,945 - 46757 - INFO - [Worker PID: 46757] Trial 194: score=-93.1604 status=OK pitch=0.4624 dist=0.127 jump=0.0658
+2026-05-06 00:02:27,471 - 46755 - INFO - [Worker PID: 46755] Trial 195: score=-94.7676 status=OK pitch=0.4557 dist=0.067 jump=0.0670
+2026-05-06 00:02:29,157 - 46756 - INFO - [Worker PID: 46756] Trial 196: score=-97.9878 status=OK pitch=0.4613 dist=0.119 jump=0.0653
+2026-05-06 00:02:30,834 - 46754 - INFO - [Worker PID: 46754] Trial 197: score=-107.0389 status=OK pitch=0.4623 dist=0.087 jump=0.0652
+2026-05-06 00:02:31,601 - 46757 - INFO - [Worker PID: 46757] Trial 198: score=-89.6126 status=OK pitch=0.4536 dist=0.029 jump=0.0659
+2026-05-06 00:02:34,648 - 46755 - INFO - [Worker PID: 46755] Trial 199: score=-98.1664 status=OK pitch=0.4589 dist=0.082 jump=0.0661
+2026-05-06 00:02:36,236 - 46756 - INFO - [Worker PID: 46756] Trial 200: score=-101.2401 status=OK pitch=0.4573 dist=0.044 jump=0.0671
+2026-05-06 00:02:38,167 - 46754 - INFO - [Worker PID: 46754] Trial 201: score=-94.6781 status=OK pitch=0.4592 dist=0.053 jump=0.0672
+2026-05-06 00:02:39,192 - 46757 - INFO - [Worker PID: 46757] Trial 202: score=-112.1228 status=OK pitch=0.4522 dist=0.038 jump=0.0655
+2026-05-06 00:02:42,361 - 46755 - INFO - [Worker PID: 46755] Trial 203: score=-100.8833 status=OK pitch=0.4508 dist=0.053 jump=0.0656
+2026-05-06 00:02:43,737 - 46756 - INFO - [Worker PID: 46756] Trial 204: score=-104.5767 status=OK pitch=0.4519 dist=0.023 jump=0.0661
+2026-05-06 00:02:45,984 - 46754 - INFO - [Worker PID: 46754] Trial 205: score=-103.2307 status=OK pitch=0.4496 dist=0.025 jump=0.0654
+2026-05-06 00:02:46,787 - 46757 - INFO - [Worker PID: 46757] Trial 206: score=-106.0769 status=OK pitch=0.4527 dist=0.022 jump=0.0661
+2026-05-06 00:02:49,406 - 46755 - INFO - [Worker PID: 46755] Trial 207: score=-1167.1407 status=OK pitch=0.4644 dist=0.026 jump=0.0730
+2026-05-06 00:02:50,627 - 46756 - INFO - [Worker PID: 46756] Trial 208: score=-2495.9354 status=OK pitch=0.5374 dist=0.088 jump=0.0928
+2026-05-06 00:02:53,033 - 46754 - INFO - [Worker PID: 46754] Trial 209: score=-92.4909 status=OK pitch=0.4620 dist=0.077 jump=0.0649
+2026-05-06 00:02:54,137 - 46757 - INFO - [Worker PID: 46757] Trial 210: score=-2334.0331 status=OK pitch=0.5653 dist=0.130 jump=0.0978

@@ -20,7 +20,7 @@ class RolloutConfig:
     duration: float
     scenario: str = "stand"
     cache_dir: Path | None = None
-    fall_height: float = 0.05
+    fall_height_drop: float = 0.15  # 相对初始高度的下降量阈值
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
     min_base_height = float(initial_base_position[2])
     max_base_height = float(initial_base_position[2])
     max_abs_pitch = abs(float(initial_state.pitch))
+    max_abs_y_drift = 0.0
     contact_count = int(data.ncon)
     control_effort = 0.0
     saturated_controls = 0
@@ -61,10 +62,35 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
     finite = True
     failure_reason: str | None = None
     executed_steps = 0
+    
+    stand_time_limit = 600.0 if config.scenario == "stand_then_drive" else float('inf')
+    is_driving_phase = config.scenario == "drive"
+    drive_start_step = 0
+    drive_start_dist = float(initial_base_position[0])
 
     step_count = max(1, int(np.ceil(config.duration / model.opt.timestep)))
     for _ in range(step_count):
         state = extract_sim_state(model, data)
+        time_elapsed = executed_steps * model.opt.timestep
+        
+        # stand_then_drive phase switching
+        if config.scenario == "stand_then_drive":
+            if not is_driving_phase:
+                if hasattr(controller, 'params'):
+                    controller.params.target_velocity = 0.0
+                
+                # Fast-forward check: if completely still after 10s (steady state) or reached limit
+                if (time_elapsed > 10.0 and abs(float(state.pitch_rate)) < 0.05 and abs(float(state.base_linear_velocity[0])) < 0.05) or time_elapsed >= 600.0:
+                    is_driving_phase = True
+                    drive_start_step = executed_steps
+                    drive_start_dist = float(state.base_position[0])
+            
+            if is_driving_phase:
+                if hasattr(controller, 'params'):
+                    drive_time = time_elapsed - (drive_start_step * float(model.opt.timestep))
+                    # 3秒内平滑加速到 15.0 rad/s (~0.45m/s)
+                    controller.params.target_velocity = min(15.0, 15.0 * drive_time / 3.0)
+
         control = np.asarray(controller(model, data, state), dtype=float)
         if control.shape != (model.nu,):
             finite = False
@@ -91,21 +117,52 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
             break
 
         state = extract_sim_state(model, data)
-        min_base_height = min(min_base_height, float(state.base_position[2]))
+        # 启动瞬态免疫期 (1s) 后才跟踪 min_base_height
+        if time_elapsed > 1.0:
+            min_base_height = min(min_base_height, float(state.base_position[2]))
         max_base_height = max(max_base_height, float(state.base_position[2]))
         max_abs_pitch = max(max_abs_pitch, abs(float(state.pitch)))
+        max_abs_y_drift = max(max_abs_y_drift, abs(float(state.base_position[1] - initial_base_position[1])))
         contact_count = max(contact_count, int(state.contact_count))
+
+        # Early termination: Fall detection (前 1s 为启动瞬态免疫期)
+        if time_elapsed > 1.0 and state.base_position[2] < initial_base_position[2] - config.fall_height_drop:
+            failure_reason = "fell"
+            break
+
+        # Early termination: Excessive pitch (loss of balance)
+        if abs(float(state.pitch)) > 1.5:
+            failure_reason = "excessive_pitch"
+            break
+
+        # Check drive completion
+        current_dist = float(state.base_position[0] - initial_base_position[0])
+        if config.scenario == "stand_then_drive" and is_driving_phase and current_dist >= 10.0:
+            break
+
+        # Early termination: Stagnation for drive scenario (or drive phase of stand_then_drive)
+        if is_driving_phase:
+            drive_elapsed_steps = executed_steps - drive_start_step
+            if drive_elapsed_steps == int(2.0 / model.opt.timestep):
+                # Using 2 seconds to check stagnation to be generous
+                drive_progress = float(state.base_position[0] - drive_start_dist)
+                if drive_progress < 0.1:
+                    failure_reason = "stagnation"
+                    break
 
     final_state = extract_sim_state(model, data)
     saturation_ratio = saturated_controls / total_controls if total_controls else 0.0
+    is_fell = failure_reason in ("fell", "excessive_pitch", "stagnation") or bool(min_base_height < initial_base_position[2] - config.fall_height_drop)
+    
     metrics = RolloutMetrics(
         duration=config.duration,
         finite=finite,
-        fell=bool(min_base_height < config.fall_height),
+        fell=is_fell,
         min_base_height=min_base_height,
         max_base_height=max_base_height,
         max_jump_height=max(0.0, max_base_height - float(initial_base_position[2])),
         max_abs_pitch=max_abs_pitch,
+        max_abs_y_drift=max_abs_y_drift,
         forward_distance=float(final_state.base_position[0] - initial_base_position[0]),
         contact_count=contact_count,
         control_effort=control_effort,

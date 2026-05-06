@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(grok-web-search)",
+      "Skill(grok-web-search:*)",
+      "mcp__grok-search__plan_intent"
+    ]
+  }
+}

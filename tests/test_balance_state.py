@@ -27,7 +27,7 @@ def test_balance_tangent_state_uses_sim_state_fields():
 
     assert tangent.shape == (4,)
     assert np.all(np.isfinite(tangent))
-    np.testing.assert_allclose(tangent, np.array([0.12, -0.34, 2.0, 1.0]))
+    np.testing.assert_allclose(tangent, np.array([0.12, 0.34, -2.0, -1.0]))
 
 
 def test_balance_tangent_state_rejects_nonfinite_values():

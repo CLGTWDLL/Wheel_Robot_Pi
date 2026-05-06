@@ -8,8 +8,8 @@ from sim.model_semantics import MODEL_SEMANTICS
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
 
 
-ROOT_QPOS = "0 0 0.06978 0 1 0 0"
-CONTROL_RANGE = "-0.5 0.5"
+ROOT_QPOS = "0 0 0.24 1 0 0 0"
+CONTROL_RANGE = "-5.0 5.0"
 
 
 def prepare_controlled_mujoco_xml(xml_path: Path, cache_dir: Path | None = None) -> Path:

@@ -6,7 +6,7 @@ import numpy as np
 
 from sim.controllers.lqr import solve_discrete_lqr
 from sim.linearize import linearize_transition
-from sim.model_semantics import MODEL_SEMANTICS
+from sim.model_semantics import MODEL_SEMANTICS, WHEEL_FORWARD_SIGNS
 from sim.state import model_addresses
 
 
@@ -55,23 +55,29 @@ def _reduced_balance_system(model: Any, data: Any) -> tuple[np.ndarray, np.ndarr
 def _balance_state_selection(model: Any) -> np.ndarray:
     addresses = model_addresses(model)
     p = np.zeros((4, 2 * model.nv))
-    pitch_index = addresses.root_qvel + 4
-    pitch_rate_index = model.nv + addresses.root_qvel + 4
-    wheel_dof_indices = [addresses.joint_qvel[name] for name in MODEL_SEMANTICS.wheel_joints]
-
-    p[0, pitch_index] = -1.0
-    p[1, pitch_rate_index] = -1.0
-    for dof_index in wheel_dof_indices:
-        p[2, dof_index] = 1.0 / len(wheel_dof_indices)
-        p[3, model.nv + dof_index] = 1.0 / len(wheel_dof_indices)
+    # 提取绕局部 X 轴的旋转 (Roll) 及其角速度
+    pitch_index = addresses.root_qvel + 3
+    pitch_rate_index = model.nv + addresses.root_qvel + 3
+    p[0, pitch_index] = 1.0
+    p[1, pitch_rate_index] = 1.0
+    # 轮子行: 取代关节速度，直接使用底盘真实的 Y 轴（前进）位置和速度
+    # 位置积分没有直接的 qvel 索引，我们在 qpos 中对应 root_qpos + 1 (Y)
+    y_pos_index = addresses.root_qpos + 1
+    y_vel_index = addresses.root_qvel + 1
+    p[2, y_pos_index] = 1.0
+    p[3, model.nv + y_vel_index] = 1.0
     return p
 
 
 def _wheel_control_selection(model: Any) -> np.ndarray:
+    """构建控制选择矩阵 S, 将 2 维虚拟控制映射到执行器空间。
+
+    使用 WHEEL_FORWARD_SIGNS 确保虚拟控制正值对应前进方向力矩。
+    """
     addresses = model_addresses(model)
     s = np.zeros((model.nu, 2))
     for column, joint_name in enumerate(MODEL_SEMANTICS.wheel_joints):
-        s[addresses.actuators[joint_name], column] = 1.0
+        s[addresses.actuators[joint_name], column] = WHEEL_FORWARD_SIGNS[joint_name]
     return s
 
 

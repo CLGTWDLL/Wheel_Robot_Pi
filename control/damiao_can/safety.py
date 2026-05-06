@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 
-from .motors import MotorConfig, get_motor
+from .motors import MotorConfig
 
 DEFAULT_TEST_TORQUE = 0.02
 MAX_TEST_TORQUE = 0.05
-MAX_NONZERO_DURATION = 0.5
-DEFAULT_PERIOD = 0.05
+MAX_NONZERO_DURATION = 10
+DEFAULT_PERIOD = 0.002
 GROUP_ZERO_DURATION = 1.0
-
-
-@dataclass(frozen=True)
-class GroupTorqueCommand:
-    motor: MotorConfig
-    torque: float
+DEFAULT_PAIR_MIT_VELOCITY = 0.2
+MAX_PAIR_MIT_VELOCITY = 5.0
+DEFAULT_PAIR_MIT_KD = 0.05
+MAX_PAIR_MIT_KD = 0.1
+DEFAULT_PAIR_MIT_TORQUE = 0.0
+MAX_PAIR_MIT_TORQUE = 1.0
+DEFAULT_PAIR_WHEEL_VELOCITY = 0.2
+MAX_PAIR_WHEEL_VELOCITY = 5.0
 
 
 def _require_finite(name: str, value: float) -> float:
@@ -63,6 +64,45 @@ def require_torque_motor(motor: MotorConfig) -> MotorConfig:
     return motor
 
 
+def validate_pair_targets(dm4310_left: MotorConfig, dmh6215_left: MotorConfig) -> None:
+    if dm4310_left.name != "dm4310_left":
+        raise ValueError("pair MIT target must be dm4310_left")
+    if dmh6215_left.name != "dmh6215_left":
+        raise ValueError("pair wheel target must be dmh6215_left")
+    if dm4310_left.mode != "mit":
+        raise ValueError("dm4310_left must be MIT mode")
+    if dmh6215_left.mode != "velocity":
+        raise ValueError("dmh6215_left must be velocity mode")
+
+
+def validate_pair_mit_velocity(velocity: float) -> float:
+    _require_finite("velocity", velocity)
+    if abs(velocity) > MAX_PAIR_MIT_VELOCITY:
+        raise ValueError(f"pair MIT velocity magnitude must be <= {MAX_PAIR_MIT_VELOCITY}")
+    return velocity
+
+
+def validate_pair_mit_kd(kd: float) -> float:
+    _require_finite("kd", kd)
+    if not 0.0 <= kd <= MAX_PAIR_MIT_KD:
+        raise ValueError(f"pair MIT kd must be within [0.0, {MAX_PAIR_MIT_KD}]")
+    return kd
+
+
+def validate_pair_mit_torque(torque: float) -> float:
+    _require_finite("torque", torque)
+    if abs(torque) > MAX_PAIR_MIT_TORQUE:
+        raise ValueError(f"pair MIT torque magnitude must be <= {MAX_PAIR_MIT_TORQUE}")
+    return torque
+
+
+def validate_pair_wheel_velocity(velocity: float) -> float:
+    _require_finite("wheel_velocity", velocity)
+    if abs(velocity) > MAX_PAIR_WHEEL_VELOCITY:
+        raise ValueError(f"pair wheel velocity magnitude must be <= {MAX_PAIR_WHEEL_VELOCITY}")
+    return velocity
+
+
 def validate_mit_parameters(
     motor: MotorConfig,
     *,
@@ -92,12 +132,3 @@ def validate_mit_parameters(
         raise ValueError("kd outside motor limit")
     if not -motor.t_max <= torque <= motor.t_max:
         raise ValueError("torque outside motor limit")
-
-
-def conservative_group_torque(torque: float = DEFAULT_TEST_TORQUE) -> tuple[GroupTorqueCommand, ...]:
-    left = get_motor("dmh6215_left")
-    right = get_motor("dmh6215_right")
-    return (
-        GroupTorqueCommand(left, validate_test_torque(left, torque)),
-        GroupTorqueCommand(right, validate_test_torque(right, torque)),
-    )

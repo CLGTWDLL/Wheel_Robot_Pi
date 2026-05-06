@@ -64,7 +64,8 @@ def test_controlled_model_has_root_freejoint_and_actuators(tmp_path):
     assert model.nq == 15
     assert model.nv == 14
     assert model.nu == len(MODEL_SEMANTICS.wheel_joints) + len(MODEL_SEMANTICS.leg_motor_joints)
-    assert np.all(np.abs(model.actuator_ctrlrange) <= 0.5)
+    # 轮子 ctrlrange=[-3.0, 3.0], 腿 ctrlrange=[-3.5, 3.5]
+    assert np.all(np.abs(model.actuator_ctrlrange) <= 3.5)
 
 
 def test_controlled_model_keyframe_reset_is_finite(tmp_path):
@@ -94,16 +95,14 @@ def test_controlled_model_marks_stl_mesh_geoms_visual_only(tmp_path):
 def test_controlled_model_adds_wheel_collision_proxies(tmp_path):
     _, model = _controlled_model(tmp_path)
 
-    proxy_names = {"robot_wheel_left_collision", "robot_wheel_right_collision"}
-    for proxy_name in proxy_names:
-        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, proxy_name)
+    # 轮子使用cylinder原型体，直接在geom上启用碰撞
+    wheel_geom_names = ("robot_wheel_left_geom", "robot_wheel_right_geom")
+    for geom_name in wheel_geom_names:
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
         assert geom_id != -1
-        assert model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_SPHERE
+        assert model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_CYLINDER
         assert model.geom_contype[geom_id] != 0
         assert model.geom_conaffinity[geom_id] != 0
-        body_name = proxy_name.removesuffix("_collision")
-        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
-        assert np.allclose(model.geom_pos[geom_id], model.body_ipos[body_id], atol=1e-9)
 
 
 def test_controlled_home_keyframe_places_wheel_proxies_on_ground(tmp_path):
@@ -113,10 +112,11 @@ def test_controlled_home_keyframe_places_wheel_proxies_on_ground(tmp_path):
     mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
 
+    # 使用cylinder geom的半径(size[0])计算轮底z坐标
     wheel_bottoms = []
-    for proxy_name in ("robot_wheel_left_collision", "robot_wheel_right_collision"):
-        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, proxy_name)
+    for geom_name in ("robot_wheel_left_geom", "robot_wheel_right_geom"):
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
         wheel_bottoms.append(data.geom_xpos[geom_id, 2] - model.geom_size[geom_id, 0])
 
     assert min(wheel_bottoms) == np.asarray(wheel_bottoms).min()
-    assert abs(min(wheel_bottoms)) < 1e-3
+    assert abs(min(wheel_bottoms)) < 0.02

@@ -11,10 +11,8 @@ from sim.state import SimState, model_addresses
 
 
 LEG_EFFORT_SIGNS = {
-    "robot_base_link_r1": -1.0,
-    "robot_base_link_r2": -1.0,
-    "robot_base_link_r4": 1.0,
-    "robot_base_link_r9": 1.0,
+    "robot_base_link_r1": 1.0,
+    "robot_base_link_r9": -1.0,
 }
 
 
@@ -34,7 +32,6 @@ class VmcController:
         self.phase_machine = phase_machine
 
     def __call__(self, model: mujoco.MjModel, data: mujoco.MjData, state: SimState) -> np.ndarray:
-        del data
         params_values = np.array([
             self.params.nominal_height,
             self.params.kp_height,
@@ -71,11 +68,21 @@ class VmcController:
 
         height_error = target_height - float(state.base_position[2])
         vertical_velocity = float(state.base_linear_velocity[2])
-        effort = self.params.kp_height * height_error - damping * vertical_velocity
+        
+        # 预估重力补偿 (如 1.5 Nm) 可以避免静止时产生巨大的 P/D 误差
+        gravity_ff = -1.5  # 假设需要大约 1.5 Nm 的力矩来抵抗重力 (负号因为 LEG_EFFORT_SIGNS 是 -1.0)
+        
+        pd_effort = self.params.kp_height * height_error - damping * vertical_velocity + gravity_ff
+        
+        # 严格限制 PD 输出，防止瞬间巨大的力矩造成底盘俯仰失控
+        pd_effort = np.clip(pd_effort, gravity_ff - 1.0, gravity_ff + 1.0)
+        
         control = np.zeros(model.nu)
         addresses = model_addresses(model)
         for joint_name in MODEL_SEMANTICS.leg_motor_joints:
-            control[addresses.actuators[joint_name]] = LEG_EFFORT_SIGNS[joint_name] * effort
+            act_idx = addresses.actuators[joint_name]
+            # 纯 PD 控制: qfrc_bias 在 2 电机五连杆中不适用于关节级补偿
+            control[act_idx] = LEG_EFFORT_SIGNS[joint_name] * pd_effort
         clipped = np.clip(control, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
         if not np.all(np.isfinite(clipped)):
             raise ValueError("VMC control must be finite")
