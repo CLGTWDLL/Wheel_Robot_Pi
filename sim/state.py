@@ -77,8 +77,7 @@ def extract_sim_state(model: mujoco.MjModel, data: mujoco.MjData) -> SimState:
         base_quaternion=base_quaternion,
         base_linear_velocity=np.array(data.qvel[root_qvel : root_qvel + 3], dtype=float),
         base_angular_velocity=base_angular_velocity,
-        # 对于左右双轮平衡车（轮轴在局部 X 轴），真实的前后倾倒角是绕 X 轴的旋转（即通常的 Roll 角）。
-        # 此模型在 quat=[1, 0, 0, 0] (roll=0) 时腿向下，因此直接返回 roll
+        # 轮轴沿世界 X 轴，底盘翻转180°后倾倒方向绕 X 轴 (wx)。
         pitch=_pitch_from_quaternion(base_quaternion),
         pitch_rate=float(base_angular_velocity[0]),
         wheel_positions={side: float(data.qpos[addresses.joint_qpos[name]]) for side, name in wheel_names.items()},
@@ -102,13 +101,10 @@ def _actuator_for_joint(model: mujoco.MjModel, joint_id: int) -> int:
 
 def _pitch_from_quaternion(quaternion: np.ndarray) -> float:
     w, x, y, z = quaternion
-    # 提取绕 X 轴的旋转 (Roll)
+    # 提取绕 X 轴的旋转 (Roll)，quat=[0,1,0,0]时为平衡点
     sinr = 2.0 * (w * x + y * z)
     cosr = 1.0 - 2.0 * (x * x + y * y)
     roll = float(np.arctan2(sinr, cosr))
-    
-    # 默认直立时的四元数为 [1, 0, 0, 0]，对应的 roll 为 0
-    error = roll
-    # 将误差包裹到 [-pi, pi] 之间
-    error = (error + np.pi) % (2 * np.pi) - np.pi
+    # 平衡点 quat=[0,1,0,0] 对应 roll=pi, 偏差 = roll - pi
+    error = roll - np.pi if roll >= 0 else roll + np.pi
     return float(error)

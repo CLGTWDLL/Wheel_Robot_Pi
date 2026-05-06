@@ -55,17 +55,17 @@ def _reduced_balance_system(model: Any, data: Any) -> tuple[np.ndarray, np.ndarr
 def _balance_state_selection(model: Any) -> np.ndarray:
     addresses = model_addresses(model)
     p = np.zeros((4, 2 * model.nv))
-    # 提取绕局部 X 轴的旋转 (Roll) 及其角速度
+    # 绕 X 轴的旋转 (Roll) 及其角速度 wx — quat=[0,1,0,0] 下的倾倒轴
     pitch_index = addresses.root_qvel + 3
     pitch_rate_index = model.nv + addresses.root_qvel + 3
+    wheel_dof_indices = [addresses.joint_qvel[name] for name in MODEL_SEMANTICS.wheel_joints]
+
     p[0, pitch_index] = 1.0
     p[1, pitch_rate_index] = 1.0
-    # 轮子行: 取代关节速度，直接使用底盘真实的 Y 轴（前进）位置和速度
-    # 位置积分没有直接的 qvel 索引，我们在 qpos 中对应 root_qpos + 1 (Y)
-    y_pos_index = addresses.root_qpos + 1
-    y_vel_index = addresses.root_qvel + 1
-    p[2, y_pos_index] = 1.0
-    p[3, model.nv + y_vel_index] = 1.0
+    # 轮子行: 关节角度/速度均值，与 balance_tangent_state 运行时一致
+    for dof_index in wheel_dof_indices:
+        p[2, dof_index] = WHEEL_FORWARD_SIGNS[MODEL_SEMANTICS.wheel_joints[wheel_dof_indices.index(dof_index)]] / len(wheel_dof_indices)
+        p[3, model.nv + dof_index] = WHEEL_FORWARD_SIGNS[MODEL_SEMANTICS.wheel_joints[wheel_dof_indices.index(dof_index)]] / len(wheel_dof_indices)
     return p
 
 

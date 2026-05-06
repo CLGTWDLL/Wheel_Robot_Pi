@@ -19,14 +19,14 @@ from sim.controllers.vmc import VmcParams
 
 STAND_PARAMS = CombinedParams(
     vmc=VmcParams(
-        nominal_height=0.24,
+        nominal_height=-0.026,
         kp_height=50.0,
         kd_height=5.0,
         crouch_offset=0.02,
         extend_offset=0.03,
         landing_damping=1.0,
     ),
-    q_diag=np.array([10.0, 1.0, 0.1, 0.1]),
+    q_diag=np.array([10000.0, 1000.0, 1.0, 0.01]),
     r_diag=np.array([2.0, 2.0]),
     velocity_kp=0.5,
     velocity_ki=0.5,

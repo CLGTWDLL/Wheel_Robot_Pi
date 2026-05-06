@@ -45,10 +45,11 @@ def test_balance_state_selection_matches_sim_state_pitch_sign(tmp_path):
     addresses = model_addresses(model)
     selection = _balance_state_selection(model)
 
-    assert selection[0, addresses.root_qvel + 4] == -1.0
-    assert selection[1, model.nv + addresses.root_qvel + 4] == -1.0
+    # Roll = wx (绕 X 轴), index = root_qvel + 3, sign = +1.0
+    assert selection[0, addresses.root_qvel + 3] == 1.0
+    assert selection[1, model.nv + addresses.root_qvel + 3] == 1.0
 
-    # 轮子行使用 WHEEL_FORWARD_SIGNS: 左轮 +0.5, 右轮 -0.5
+    # 轮子行使用 WHEEL_FORWARD_SIGNS 均值
     from sim.model_semantics import WHEEL_FORWARD_SIGNS, MODEL_SEMANTICS
     for name in MODEL_SEMANTICS.wheel_joints:
         dof = addresses.joint_qvel[name]

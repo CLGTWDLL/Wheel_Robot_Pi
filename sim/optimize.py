@@ -70,7 +70,7 @@ class OptimizationResult:
 def score_metrics(
     metrics: RolloutMetrics,
     scenario: str = "stand",
-    nominal_height: float = 0.06078,
+    nominal_height: float = -0.026,
 ) -> float:
     """根据场景计算评分。
 
@@ -194,7 +194,7 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
     """
     return CombinedParams(
         vmc=VmcParams(
-            nominal_height=trial.suggest_float("nominal_height", 0.24, 0.30),
+            nominal_height=trial.suggest_float("nominal_height", -0.04, 0.0),
             kp_height=trial.suggest_float("kp_height", 10.0, 500.0, log=True),
             kd_height=trial.suggest_float("kd_height", 3.0, 30.0, log=True),
             crouch_offset=trial.suggest_float("crouch_offset", 0.01, 0.04),
@@ -202,10 +202,10 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
             landing_damping=trial.suggest_float("landing_damping", 0.3, 3.0, log=True),
         ),
         q_diag=np.array([
-            trial.suggest_float("q_pitch", 50.0, 5000.0, log=True),
-            trial.suggest_float("q_pitch_rate", 5.0, 3000.0, log=True),
-            trial.suggest_float("q_wheel_pos", 0.5, 200.0, log=True),
-            trial.suggest_float("q_wheel_vel", 0.5, 300.0, log=True),
+            trial.suggest_float("q_pitch", 1000.0, 100000.0, log=True),
+            trial.suggest_float("q_pitch_rate", 100.0, 20000.0, log=True),
+            trial.suggest_float("q_wheel_pos", 0.01, 10.0, log=True),
+            trial.suggest_float("q_wheel_vel", 1e-4, 1.0, log=True),
         ]),
         r_diag=np.array([
             trial.suggest_float("r_torque1", 0.1, 20.0, log=True),

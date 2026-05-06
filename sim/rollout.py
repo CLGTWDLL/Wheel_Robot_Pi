@@ -66,7 +66,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
     stand_time_limit = 600.0 if config.scenario == "stand_then_drive" else float('inf')
     is_driving_phase = config.scenario == "drive"
     drive_start_step = 0
-    drive_start_dist = float(initial_base_position[0])
+    drive_start_dist = float(initial_base_position[1])
 
     step_count = max(1, int(np.ceil(config.duration / model.opt.timestep)))
     for _ in range(step_count):
@@ -80,10 +80,10 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
                     controller.params.target_velocity = 0.0
                 
                 # Fast-forward check: if completely still after 10s (steady state) or reached limit
-                if (time_elapsed > 10.0 and abs(float(state.pitch_rate)) < 0.05 and abs(float(state.base_linear_velocity[0])) < 0.05) or time_elapsed >= 600.0:
+                if (time_elapsed > 10.0 and abs(float(state.pitch_rate)) < 0.05 and abs(float(state.base_linear_velocity[1])) < 0.05) or time_elapsed >= 600.0:
                     is_driving_phase = True
                     drive_start_step = executed_steps
-                    drive_start_dist = float(state.base_position[0])
+                    drive_start_dist = float(state.base_position[1])
             
             if is_driving_phase:
                 if hasattr(controller, 'params'):
@@ -122,7 +122,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
             min_base_height = min(min_base_height, float(state.base_position[2]))
         max_base_height = max(max_base_height, float(state.base_position[2]))
         max_abs_pitch = max(max_abs_pitch, abs(float(state.pitch)))
-        max_abs_y_drift = max(max_abs_y_drift, abs(float(state.base_position[1] - initial_base_position[1])))
+        max_abs_y_drift = max(max_abs_y_drift, abs(float(state.base_position[0] - initial_base_position[0])))
         contact_count = max(contact_count, int(state.contact_count))
 
         # Early termination: Fall detection (前 1s 为启动瞬态免疫期)
@@ -136,7 +136,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
             break
 
         # Check drive completion
-        current_dist = float(state.base_position[0] - initial_base_position[0])
+        current_dist = float(state.base_position[1] - initial_base_position[1])
         if config.scenario == "stand_then_drive" and is_driving_phase and current_dist >= 10.0:
             break
 
@@ -145,7 +145,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
             drive_elapsed_steps = executed_steps - drive_start_step
             if drive_elapsed_steps == int(2.0 / model.opt.timestep):
                 # Using 2 seconds to check stagnation to be generous
-                drive_progress = float(state.base_position[0] - drive_start_dist)
+                drive_progress = float(state.base_position[1] - drive_start_dist)
                 if drive_progress < 0.1:
                     failure_reason = "stagnation"
                     break
@@ -163,7 +163,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
         max_jump_height=max(0.0, max_base_height - float(initial_base_position[2])),
         max_abs_pitch=max_abs_pitch,
         max_abs_y_drift=max_abs_y_drift,
-        forward_distance=float(final_state.base_position[0] - initial_base_position[0]),
+        forward_distance=float(final_state.base_position[1] - initial_base_position[1]),
         contact_count=contact_count,
         control_effort=control_effort,
         saturation_ratio=saturation_ratio,

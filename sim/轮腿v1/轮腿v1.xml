@@ -22,7 +22,7 @@
     <worldbody>
         <light directional="true" pos="-0.5 0.5 3" dir="0 0 -1" />
         <geom pos="0 0 0" size="0 0 1" type="plane" material="grid_mat" />
-        <body name="base_link" pos="0 0 0.06978" euler="3.141592653589793 0 0">
+        <body name="base_link" pos="0 0 0.06978" euler="3.403392 0 0">
             <geom name="base_link_geom" type="mesh" mesh="base_link" pos="0 0 0" euler="0 0 0" contype="0" conaffinity="0" group="1" />
             <inertial mass="1.0151346729857265" pos="0.0005337578146895701 0.096 -0.1376487452325793" fullinertia="0.0022603249047739027 0.0033249253420046896 0.0037291749507083636 -2.4276206741919606e-06 -6.288547517541241e-05 0.00039958298524939227" />
             <body name="robot_link1_left" pos="0.11100000000000015 0.026016243723544823 0.06760360099921775" quat="1.7980314490330053e-16 -2.8138712139802418e-16 -0.48374530595137988 -0.87520882020807234">

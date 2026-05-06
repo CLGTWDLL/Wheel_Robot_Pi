@@ -65,33 +65,8 @@ class CombinedController:
         from sim.controllers.balance_lqr import _reduced_balance_system
         from sim.controllers.lqr import solve_discrete_lqr as _solve_lqr
 
-        # 预先计算好的 z=0.24 时的关节角度，避免腿部伸直导致穿模或接触惩罚力导致刚度矩阵畸变
-        orig_qpos = data.qpos.copy()
-        data.qpos[2] = 0.24
-        squatted_qpos = {
-            "robot_base_link_r1": 0.190978,
-            "robot_link1_left_r8": 0.278064,
-            "robot_link2_left_r3": 0.010834,
-            "robot_base_link_r2": 0.317393,
-            "robot_base_link_r9": 0.190871,
-            "robot_link1_right_r6": 0.277937,
-            "robot_link2_right_r7": 0.010836,
-            "robot_base_link_r4": 0.317367,
-        }
-        for name, value in squatted_qpos.items():
-            try:
-                jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-                if jid >= 0:
-                    data.qpos[model.jnt_qposadr[jid]] = value
-            except Exception:
-                pass
-
-        mujoco.mj_forward(model, data)
+        # 在 keyframe 状态下线性化（已由 rollout 初始化为正确构型）
         a, b = _reduced_balance_system(model, data)
-        
-        # Restore original state
-        data.qpos[:] = orig_qpos
-        mujoco.mj_forward(model, data)
         # 单输入 LQR: 合并两轮为一个虚拟输入
         b_sum = b.sum(axis=1, keepdims=True)
         q = np.diag(self.params.q_diag)
@@ -194,12 +169,12 @@ class CombinedController:
 
     @staticmethod
     def _forward_wheel_position(state: SimState) -> float:
-        """计算真实的底盘前进位置，避免腿部折叠带来的关节角伪影。"""
-        # 机器人的前进方向是全局 Y 轴
+        """计算真实的底盘前进位置。"""
+        # quat=[0,1,0,0] 下机器人的前进方向是全局 Y 轴
         return float(state.base_position[1])
 
     @staticmethod
     def _forward_wheel_velocity(state: SimState) -> float:
-        """计算真实的底盘前进速度，避免腿部折叠带来的关节角伪影。"""
-        # 机器人的前进方向是全局 Y 轴
+        """计算真实的底盘前进速度。"""
+        # quat=[0,1,0,0] 下机器人的前进方向是全局 Y 轴
         return float(state.base_linear_velocity[1])

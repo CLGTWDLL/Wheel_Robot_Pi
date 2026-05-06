@@ -11,9 +11,10 @@ def balance_tangent_state(model: object, data: object, state: SimState) -> np.nd
 
     状态向量: [pitch, pitch_rate, avg_wheel_pos, avg_wheel_vel]
 
-    pitch 和 pitch_rate 现已修正为绕局部 X 轴的旋转（即真实的倾倒角 Roll）：
-    - pitch = roll - pi (跌倒向前时为正)
-    - pitch_rate = wx (跌倒向前时为正)
+    pitch 和 pitch_rate 为绕 X 轴的旋转 (Roll) 及角速度 (wx):
+    - 平衡点 quat=[0,1,0,0] 对应 roll=pi
+    - pitch = roll - pi (前倾为正)
+    - pitch_rate = wx
 
     轮子位置/速度使用 WHEEL_FORWARD_SIGNS 统一方向后取平均。
     """
