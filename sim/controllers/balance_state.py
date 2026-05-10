@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import numpy as np
 
-from sim.model_semantics import MODEL_SEMANTICS, WHEEL_FORWARD_SIGNS
+from sim.model_semantics import MODEL_SEMANTICS, WHEEL_FORWARD_SIGNS, WHEEL_RADIUS
 from sim.state import SimState
 
 
 def balance_tangent_state(model: object, data: object, state: SimState) -> np.ndarray:
     """提取 LQR 平衡控制用的 4 维切线状态。
 
-    状态向量: [pitch, pitch_rate, avg_wheel_pos, avg_wheel_vel]
+    状态向量: [pitch(rad), pitch_rate(rad/s), avg_wheel_pos(m), avg_wheel_vel(m/s)]
 
-    pitch 和 pitch_rate 为绕 X 轴的旋转 (Roll) 及角速度 (wx):
-    - 平衡点 quat=[0,1,0,0] 对应 roll=pi
-    - pitch = roll - pi (前倾为正)
-    - pitch_rate = wx
+    pitch 和 pitch_rate 与 sim.state.extract_sim_state 保持一致:
+    - pitch 从 MuJoCo 四元数 [w, x, y, z] 提取局部 Y 轴倾角
+    - pitch_rate = wy = base_angular_velocity[1]
 
     轮子位置/速度使用 WHEEL_FORWARD_SIGNS 统一方向后取平均。
     """
@@ -35,8 +34,8 @@ def balance_tangent_state(model: object, data: object, state: SimState) -> np.nd
         [
             state.pitch,
             state.pitch_rate,
-            float(np.mean(forward_wheel_positions)),
-            float(np.mean(forward_wheel_velocities)),
+            float(np.mean(forward_wheel_positions)) * WHEEL_RADIUS,
+            float(np.mean(forward_wheel_velocities)) * WHEEL_RADIUS,
         ],
         dtype=float,
     )

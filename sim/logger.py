@@ -109,7 +109,7 @@ class TelemetryLogger:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args):
         self.close()
 
 def cleanup_old_logs(base_dir: Path, max_keep: int = 4) -> None:

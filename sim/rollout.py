@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
-import mujoco
+mujoco = cast(Any, importlib.import_module("mujoco"))
 import numpy as np
 
 from sim.metrics import RolloutMetrics
@@ -12,7 +14,7 @@ from sim.model_xml import prepare_controlled_mujoco_xml
 from sim.state import SimState, extract_sim_state
 
 
-Controller = Callable[[mujoco.MjModel, mujoco.MjData, SimState], np.ndarray]
+Controller = Callable[[Any, Any, SimState], np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -25,8 +27,8 @@ class RolloutConfig:
 
 @dataclass(frozen=True)
 class RolloutResult:
-    model: mujoco.MjModel
-    data: mujoco.MjData
+    model: Any
+    data: Any
     metrics: RolloutMetrics
     steps: int
     initial_base_position: np.ndarray
@@ -34,7 +36,7 @@ class RolloutResult:
     failure_reason: str | None = None
 
 
-def zero_controller(model: mujoco.MjModel, data: mujoco.MjData, state: SimState) -> np.ndarray:
+def zero_controller(model: Any, data: Any, state: SimState) -> np.ndarray:
     del data, state
     return np.zeros(model.nu)
 
@@ -43,7 +45,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
     model_path = prepare_controlled_mujoco_xml(xml_path, cache_dir=config.cache_dir)
     model = mujoco.MjModel.from_xml_path(str(model_path))
     data = mujoco.MjData(model)
-    key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "link23_connected_home")
+    key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "link23_connected_stand")
     if key_id != -1:
         mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
@@ -63,10 +65,9 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
     failure_reason: str | None = None
     executed_steps = 0
     
-    stand_time_limit = 600.0 if config.scenario == "stand_then_drive" else float('inf')
     is_driving_phase = config.scenario == "drive"
     drive_start_step = 0
-    drive_start_dist = float(initial_base_position[1])
+    drive_start_dist = float(initial_base_position[0])
 
     step_count = max(1, int(np.ceil(config.duration / model.opt.timestep)))
     for _ in range(step_count):
@@ -76,20 +77,22 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
         # stand_then_drive phase switching
         if config.scenario == "stand_then_drive":
             if not is_driving_phase:
-                if hasattr(controller, 'params'):
-                    controller.params.target_velocity = 0.0
+                params = getattr(controller, "params", None)
+                if params is not None:
+                    params.target_velocity = 0.0
                 
                 # Fast-forward check: if completely still after 10s (steady state) or reached limit
                 if (time_elapsed > 10.0 and abs(float(state.pitch_rate)) < 0.05 and abs(float(state.base_linear_velocity[1])) < 0.05) or time_elapsed >= 600.0:
                     is_driving_phase = True
                     drive_start_step = executed_steps
-                    drive_start_dist = float(state.base_position[1])
+                    drive_start_dist = float(state.base_position[0])
             
             if is_driving_phase:
-                if hasattr(controller, 'params'):
+                params = getattr(controller, "params", None)
+                if params is not None:
                     drive_time = time_elapsed - (drive_start_step * float(model.opt.timestep))
-                    # 3秒内平滑加速到 15.0 rad/s (~0.45m/s)
-                    controller.params.target_velocity = min(15.0, 15.0 * drive_time / 3.0)
+                    # 3 秒内平滑加速到 0.45 m/s。
+                    params.target_velocity = min(0.45, 0.45 * drive_time / 3.0)
 
         control = np.asarray(controller(model, data, state), dtype=float)
         if control.shape != (model.nu,):
@@ -122,7 +125,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
             min_base_height = min(min_base_height, float(state.base_position[2]))
         max_base_height = max(max_base_height, float(state.base_position[2]))
         max_abs_pitch = max(max_abs_pitch, abs(float(state.pitch)))
-        max_abs_y_drift = max(max_abs_y_drift, abs(float(state.base_position[0] - initial_base_position[0])))
+        max_abs_y_drift = max(max_abs_y_drift, abs(float(state.base_position[1] - initial_base_position[1])))
         contact_count = max(contact_count, int(state.contact_count))
 
         # Early termination: Fall detection (前 1s 为启动瞬态免疫期)
@@ -136,7 +139,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
             break
 
         # Check drive completion
-        current_dist = float(state.base_position[1] - initial_base_position[1])
+        current_dist = float(state.base_position[0] - initial_base_position[0])
         if config.scenario == "stand_then_drive" and is_driving_phase and current_dist >= 10.0:
             break
 
@@ -145,7 +148,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
             drive_elapsed_steps = executed_steps - drive_start_step
             if drive_elapsed_steps == int(2.0 / model.opt.timestep):
                 # Using 2 seconds to check stagnation to be generous
-                drive_progress = float(state.base_position[1] - drive_start_dist)
+                drive_progress = float(state.base_position[0] - drive_start_dist)
                 if drive_progress < 0.1:
                     failure_reason = "stagnation"
                     break
@@ -163,7 +166,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
         max_jump_height=max(0.0, max_base_height - float(initial_base_position[2])),
         max_abs_pitch=max_abs_pitch,
         max_abs_y_drift=max_abs_y_drift,
-        forward_distance=float(final_state.base_position[1] - initial_base_position[1]),
+        forward_distance=float(final_state.base_position[0] - initial_base_position[0]),
         contact_count=contact_count,
         control_effort=control_effort,
         saturation_ratio=saturation_ratio,
@@ -179,7 +182,7 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
     )
 
 
-def _clip_control(model: mujoco.MjModel, control: np.ndarray) -> np.ndarray:
+def _clip_control(model: Any, control: np.ndarray) -> np.ndarray:
     if model.nu == 0:
         return control
     return np.clip(control, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])

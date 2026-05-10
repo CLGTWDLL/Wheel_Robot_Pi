@@ -8,6 +8,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # 确保项目根目录在 sys.path 中，使 sim 包可被正确导入
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -15,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 
 from sim.controllers.combined import CombinedController
-from sim.controllers.default_params import STAND_PARAMS, STAND_THEN_DRIVE_PARAMS
+from sim.controllers.default_params import STAND_PARAMS
 from sim.controllers.phase import JumpPhaseMachine, JumpPhaseParams
 from sim.controllers.vmc import VmcController
 from sim.model_xml import prepare_controlled_mujoco_xml
@@ -25,7 +26,8 @@ from sim.state import extract_sim_state
 from sim.logger import setup_system_logger, TelemetryLogger, cleanup_old_logs
 
 
-HOME_KEYFRAME = "link23_connected_home"
+HOME_KEYFRAME = "link23_connected_stand"
+CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z")
 
 
 def ensure_dependencies() -> None:
@@ -61,7 +63,7 @@ def ensure_dependencies() -> None:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     sim_root = Path(__file__).resolve().parent
-    default_xml = sim_root / "轮腿v1" / "轮腿v1.xml"
+    default_xml = sim_root / "robot" / "robot.urdf"
 
     parser = argparse.ArgumentParser(
         description="Launch MuJoCo simulation with the robot XML model."
@@ -70,7 +72,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--xml",
         type=Path,
         default=default_xml,
-        help="Path to a MuJoCo XML model file.",
+        help="Path to a URDF model file (converted to MJCF automatically).",
     )
     parser.add_argument(
         "--mode",
@@ -95,16 +97,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Optional directory for generated controlled XML and preprocessed meshes.",
     )
+    parser.add_argument(
+        "--show-collision",
+        action="store_true",
+        help="Hide visual meshes and show collision primitives for verification.",
+    )
     return parser.parse_args(argv)
 
 
-def apply_home_keyframe(model: object, data: object, mujoco_module: object) -> None:
+def apply_home_keyframe(model: Any, data: Any, mujoco_module: Any) -> None:
     key_id = mujoco_module.mj_name2id(model, mujoco_module.mjtObj.mjOBJ_KEY, HOME_KEYFRAME)
     if key_id != -1:
         mujoco_module.mj_resetDataKeyframe(model, data, key_id)
 
 
-def build_controlled_model(xml_path: Path, cache_dir: Path | None = None) -> tuple[object, object]:
+def build_controlled_model(xml_path: Path, cache_dir: Path | None = None) -> tuple[Any, Any]:
     import mujoco
 
     prepared_xml = prepare_controlled_mujoco_xml(xml_path, cache_dir=cache_dir)
@@ -137,8 +144,8 @@ def create_controlled_controller(controller_name: str, scenario: str) -> Control
 
 
 def step_controlled_model(
-    model: object, 
-    data: object, 
+    model: Any,
+    data: Any,
     controller: Controller, 
     telemetry_logger: TelemetryLogger | None = None,
     target_info: str = "",
@@ -147,31 +154,66 @@ def step_controlled_model(
 
     state = extract_sim_state(model, data)
     control = np.asarray(controller(model, data, state), dtype=float)
-    
-    if telemetry_logger is not None:
-        telemetry_logger.log_step(data.time, state, target_info, control)
-        
     if control.shape != (model.nu,):
         raise ValueError(f"controller returned shape {control.shape}, expected {(model.nu,)}")
-    if not np.all(np.isfinite(control)):
-        data.ctrl[:] = control
+
+    clipped_control = _clip_control(model, control)
+    if telemetry_logger is not None:
+        telemetry_logger.log_step(data.time, state, target_info, clipped_control)
+
+    if not np.all(np.isfinite(control)) or not np.all(np.isfinite(clipped_control)):
+        _write_physical_ctrl(model, data, clipped_control)
         return False
 
-    data.ctrl[:] = _clip_control(model, control)
+    _write_physical_ctrl(model, data, clipped_control)
     mujoco.mj_step(model, data)
     return bool(np.all(np.isfinite(data.qpos)) and np.all(np.isfinite(data.qvel)))
 
 
+def _write_physical_ctrl(model: Any, data: Any, control: np.ndarray) -> None:
+    """写入真实执行器控制量，保留 command slider 的 ctrl 值。"""
+    import mujoco
+    command_values: dict[int, float] = {}
+    for name in CMD_SLIDER_NAMES:
+        act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+        if act_id >= 0:
+            command_values[act_id] = float(data.ctrl[act_id])
+    data.ctrl[:] = control
+    for act_id, value in command_values.items():
+        data.ctrl[act_id] = value
+
+
+def _read_cmd_sliders(model: Any, data: Any) -> tuple[float, float]:
+    """读取 cmd_linear_x / cmd_angular_z 滑块的当前 ctrl 值。"""
+    import mujoco
+    result = [0.0, 0.0]
+    for i, name in enumerate(CMD_SLIDER_NAMES):
+        act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+        if act_id >= 0:
+            result[i] = float(data.ctrl[act_id])
+    return result[0], result[1]
+
+
+def _restore_cmd_sliders(model: Any, data: Any, linear_x: float, angular_z: float) -> None:
+    """控制器 step 会覆盖 data.ctrl，这里恢复滑块值使其持续生效。"""
+    import mujoco
+    for name, val in zip(CMD_SLIDER_NAMES, (linear_x, angular_z)):
+        act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+        if act_id >= 0:
+            data.ctrl[act_id] = val
+
+
 def run_controlled_viewer_loop(
-    model: object,
-    data: object,
+    model: Any,
+    data: Any,
     controller: Controller,
-    viewer: object,
+    viewer: Any,
     telemetry_logger: TelemetryLogger | None = None,
 ) -> None:
     """以实时速度运行 viewer 仿真循环。
 
     每帧计算需要追赶的仿真步数，使仿真时间与墙钟时间同步。
+    同时读取 cmd_linear_x / cmd_angular_z 滑块驱动控制器。
     """
     wall_start = time.perf_counter()
     sim_start = data.time
@@ -182,14 +224,25 @@ def run_controlled_viewer_loop(
         # 步进仿真直到追上目标时间
         with viewer.lock():
             while data.time < target_sim_time:
+                # 读取用户滑块指令
+                linear_x, angular_z = _read_cmd_sliders(model, data)
+                if isinstance(controller, CombinedController):
+                    controller.params.target_velocity = linear_x
+                    controller.params.target_yaw_rate = angular_z
+
                 target_info = ""
-                if hasattr(controller, 'params'):
-                    if hasattr(controller.params, 'target_velocity'):
-                        target_info = f"v={controller.params.target_velocity:.2f}"
-                    if hasattr(controller.params, 'vmc') and hasattr(controller.params.vmc, 'nominal_height'):
-                        target_info += f",h={controller.params.vmc.nominal_height:.3f}"
+                params = getattr(controller, "params", None)
+                target_velocity = getattr(params, "target_velocity", None)
+                if target_velocity is not None:
+                    target_info = f"v={target_velocity:.2f}"
+                vmc = getattr(params, "vmc", None)
+                nominal_height = getattr(vmc, "nominal_height", None)
+                if nominal_height is not None:
+                    target_info += f",h={nominal_height:.3f}"
                         
                 finite = step_controlled_model(model, data, controller, telemetry_logger, target_info)
+                # 恢复滑块值（step 会覆盖 data.ctrl）
+                _restore_cmd_sliders(model, data, linear_x, angular_z)
                 if not finite:
                     return
         viewer.sync()
@@ -234,13 +287,25 @@ def main() -> None:
     import mujoco
     import mujoco.viewer
 
+    def apply_viewer_settings(v: Any) -> None:
+        if args.show_collision:
+            v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONVEXHULL] = True
+            v.opt.geomgroup[1] = 0 # Hide visual
+            v.opt.geomgroup[3] = 1 # Show collision
+
     if args.mode == "viewer":
-        prepared_xml = prepare_mujoco_xml(args.xml)
+        prepared_xml = prepare_controlled_mujoco_xml(args.xml) if args.show_collision else prepare_mujoco_xml(args.xml)
         model = mujoco.MjModel.from_xml_path(str(prepared_xml))
         data = mujoco.MjData(model)
         apply_home_keyframe(model, data, mujoco)
+        mujoco.mj_forward(model, data)
         system_logger.info("Viewer mode started. No telemetry will be recorded.")
-        mujoco.viewer.launch(model, data)
+        with mujoco.viewer.launch_passive(model, data) as viewer:
+            apply_viewer_settings(viewer)
+            import time
+            while viewer.is_running():
+                viewer.sync()
+                time.sleep(0.05)
         return
 
     model, data = build_controlled_model(args.xml, cache_dir=args.cache_dir)
@@ -251,6 +316,7 @@ def main() -> None:
     with TelemetryLogger(log_dir / "telemetry.csv") as telemetry_logger:
         if args.scenario == "drive" and isinstance(controller, CombinedController):
             with mujoco.viewer.launch_passive(model, data) as viewer:
+                apply_viewer_settings(viewer)
                 wall_start = time.perf_counter()
                 sim_start = data.time
                 while viewer.is_running():
@@ -274,6 +340,7 @@ def main() -> None:
                         break
         else:
             with mujoco.viewer.launch_passive(model, data) as viewer:
+                apply_viewer_settings(viewer)
                 run_controlled_viewer_loop(model, data, controller, viewer, telemetry_logger)
                 
     system_logger.info("Simulation finished. Logs saved.")

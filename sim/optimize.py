@@ -6,14 +6,12 @@ warm start 从已知最佳参数出发。
 from __future__ import annotations
 
 import argparse
-import math
 import multiprocessing
 import os
 import time
 import datetime
 from dataclasses import dataclass, asdict
 from pathlib import Path
-import random
 import gc
 
 import numpy as np
@@ -96,24 +94,25 @@ def score_metrics(
         raise ValueError(f"unsupported scenario for scoring: {scenario}")
 
 
+def _base_penalty(metrics: RolloutMetrics, finite_penalty: float, fell_penalty: float) -> float:
+    """计算通用惩罚项 (饱和、崩溃、无穷大状态)。"""
+    score = 0.0
+    score -= 2.0 * metrics.saturation_ratio
+    if not metrics.finite:
+        score -= finite_penalty
+    if metrics.fell:
+        score -= fell_penalty
+    return score
+
+
 def _score_stand(metrics: RolloutMetrics, nominal_height: float) -> float:
     """stand 评分: 稳定站立 + 高度保持。"""
     score = 0.0
-    # pitch 稳定性 (放大 100 倍，典型值 0.001 rad → 惩罚 0.1)
     score -= 100.0 * metrics.max_abs_pitch
-    # 高度保持 (与标称高度的偏差)
     height_deviation = abs(metrics.min_base_height - nominal_height)
     score -= 50.0 * height_deviation
-    # 执行器饱和惩罚
-    score -= 2.0 * metrics.saturation_ratio
-    # 能耗 (轻微惩罚)
     score -= 0.01 * metrics.control_effort
-    # 致命惩罚
-    if not metrics.finite:
-        score -= 200.0
-    if metrics.fell:
-        score -= 100.0
-    # 存活奖励
+    score += _base_penalty(metrics, finite_penalty=200.0, fell_penalty=100.0)
     if metrics.finite and not metrics.fell:
         score += 10.0
     return score
@@ -122,20 +121,10 @@ def _score_stand(metrics: RolloutMetrics, nominal_height: float) -> float:
 def _score_drive(metrics: RolloutMetrics) -> float:
     """drive 评分: 前进距离 + 行驶稳定性。"""
     score = 0.0
-    # 前进距离 (主要目标)
     score += 20.0 * metrics.forward_distance
-    # pitch 稳定性
     score -= 50.0 * metrics.max_abs_pitch
-    # 执行器饱和惩罚
-    score -= 2.0 * metrics.saturation_ratio
-    # 能耗
     score -= 0.005 * metrics.control_effort
-    # 致命惩罚
-    if not metrics.finite:
-        score -= 200.0
-    if metrics.fell:
-        score -= 100.0
-    # 存活奖励
+    score += _base_penalty(metrics, finite_penalty=200.0, fell_penalty=100.0)
     if metrics.finite and not metrics.fell:
         score += 5.0
     return score
@@ -144,18 +133,9 @@ def _score_drive(metrics: RolloutMetrics) -> float:
 def _score_jump(metrics: RolloutMetrics) -> float:
     """jump 评分: 跳跃高度 + 着陆恢复。"""
     score = 0.0
-    # 跳跃高度 (主要目标)
     score += 200.0 * metrics.max_jump_height
-    # pitch 稳定性 (宽松)
     score -= 30.0 * metrics.max_abs_pitch
-    # 执行器饱和惩罚
-    score -= 2.0 * metrics.saturation_ratio
-    # 致命惩罚
-    if not metrics.finite:
-        score -= 200.0
-    if metrics.fell:
-        score -= 50.0
-    # 存活奖励
+    score += _base_penalty(metrics, finite_penalty=200.0, fell_penalty=50.0)
     if metrics.finite and not metrics.fell:
         score += 5.0
     return score
@@ -164,20 +144,10 @@ def _score_jump(metrics: RolloutMetrics) -> float:
 def _score_stand_then_drive(metrics: RolloutMetrics) -> float:
     """stand_then_drive 评分: 完成10米直行 + 极小漂移 + 极小pitch。"""
     score = 0.0
-    # 主要目标：完成 10 米直行
     score += 100.0 * metrics.forward_distance
-    # 惩罚：Y 轴漂移，要求直线
     score -= 500.0 * metrics.max_abs_y_drift
-    # 惩罚：pitch 震荡
     score -= 100.0 * metrics.max_abs_pitch
-    # 惩罚：执行器饱和
-    score -= 2.0 * metrics.saturation_ratio
-    # 致命惩罚
-    if not metrics.finite:
-        score -= 1000.0
-    if metrics.fell:
-        score -= 500.0
-    # 存活及完成奖励
+    score += _base_penalty(metrics, finite_penalty=1000.0, fell_penalty=500.0)
     if metrics.finite and not metrics.fell:
         score += 50.0
         if metrics.forward_distance >= 9.9:
@@ -194,18 +164,18 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
     """
     return CombinedParams(
         vmc=VmcParams(
-            nominal_height=trial.suggest_float("nominal_height", -0.04, 0.0),
+            nominal_height=trial.suggest_float("nominal_height", 0.55, 0.75),
             kp_height=trial.suggest_float("kp_height", 10.0, 500.0, log=True),
-            kd_height=trial.suggest_float("kd_height", 3.0, 30.0, log=True),
-            crouch_offset=trial.suggest_float("crouch_offset", 0.01, 0.04),
-            extend_offset=trial.suggest_float("extend_offset", 0.01, 0.04),
-            landing_damping=trial.suggest_float("landing_damping", 0.3, 3.0, log=True),
+            kd_height=trial.suggest_float("kd_height", 3.0, 60.0, log=True),
+            crouch_offset=trial.suggest_float("crouch_offset", -0.04, 0.02),
+            extend_offset=trial.suggest_float("extend_offset", 0.0, 0.12),
+            landing_damping=trial.suggest_float("landing_damping", 0.0, 3.0),
         ),
         q_diag=np.array([
             trial.suggest_float("q_pitch", 1000.0, 100000.0, log=True),
             trial.suggest_float("q_pitch_rate", 100.0, 20000.0, log=True),
-            trial.suggest_float("q_wheel_pos", 0.01, 10.0, log=True),
-            trial.suggest_float("q_wheel_vel", 1e-4, 1.0, log=True),
+            trial.suggest_float("q_wheel_pos", 0.01, 200.0, log=True),
+            trial.suggest_float("q_wheel_vel", 1e-4, 20.0, log=True),
         ]),
         r_diag=np.array([
             trial.suggest_float("r_torque1", 0.1, 20.0, log=True),
@@ -213,7 +183,7 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
         ]),
         velocity_kp=trial.suggest_float("velocity_kp", 0.01, 3.0, log=True),
         velocity_ki=trial.suggest_float("velocity_ki", 0.005, 0.5, log=True),
-        pitch_trim=trial.suggest_float("pitch_trim", -0.5, 0.1),
+        pitch_trim=trial.suggest_float("pitch_trim", -0.5, 0.8),
         pitch_lean_gain=trial.suggest_float("pitch_lean_gain", 0.005, 0.2, log=True),
         yaw_damping=trial.suggest_float("yaw_damping", 0.1, 3.0, log=True),
         yaw_ki=trial.suggest_float("yaw_ki", 0.01, 1.0, log=True),
@@ -336,6 +306,14 @@ def _optimize_worker(storage_url: str, study_name: str, xml_path: Path, config: 
             raise
 
 
+def _run_single_process_optimization(
+    study: optuna.Study,
+    xml_path: Path,
+    config: OptimizationConfig,
+) -> None:
+    study.optimize(lambda t: _objective(t, xml_path, config), n_trials=config.trials, gc_after_trial=True)
+
+
 def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> OptimizationResult:
     """运行参数优化。
 
@@ -375,47 +353,59 @@ def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> Optimizat
 
     if config.warm_start:
         study.enqueue_trial({
-            "nominal_height": STAND_PARAMS.vmc.nominal_height,
-            "kp_height": STAND_PARAMS.vmc.kp_height,
-            "kd_height": STAND_PARAMS.vmc.kd_height,
-            "crouch_offset": STAND_PARAMS.vmc.crouch_offset,
-            "extend_offset": STAND_PARAMS.vmc.extend_offset,
-            "landing_damping": STAND_PARAMS.vmc.landing_damping,
-            "q_pitch": STAND_PARAMS.q_diag[0],
-            "q_pitch_rate": STAND_PARAMS.q_diag[1],
-            "q_wheel_pos": STAND_PARAMS.q_diag[2],
-            "q_wheel_vel": STAND_PARAMS.q_diag[3],
-            "r_torque1": STAND_PARAMS.r_diag[0],
-            "r_torque2": STAND_PARAMS.r_diag[1],
-            "velocity_kp": STAND_PARAMS.velocity_kp,
-            "velocity_ki": STAND_PARAMS.velocity_ki,
-            "pitch_trim": STAND_PARAMS.pitch_trim,
-            "pitch_lean_gain": STAND_PARAMS.pitch_lean_gain,
-            "yaw_damping": STAND_PARAMS.yaw_damping,
-            "crouch_duration": DEFAULT_PHASE_PARAMS.crouch_duration,
-            "extend_duration": DEFAULT_PHASE_PARAMS.extend_duration,
-            "flight_timeout": DEFAULT_PHASE_PARAMS.flight_timeout,
+            "nominal_height": max(0.55, min(0.75, STAND_PARAMS.vmc.nominal_height)),
+            "kp_height": max(10.0, STAND_PARAMS.vmc.kp_height),
+            "kd_height": max(3.0, min(60.0, STAND_PARAMS.vmc.kd_height)),
+            "crouch_offset": max(-0.04, min(0.02, STAND_PARAMS.vmc.crouch_offset)),
+            "extend_offset": max(0.0, min(0.12, STAND_PARAMS.vmc.extend_offset)),
+            "landing_damping": max(0.0, min(3.0, STAND_PARAMS.vmc.landing_damping)),
+            "q_pitch": max(1000.0, STAND_PARAMS.q_diag[0]),
+            "q_pitch_rate": max(100.0, STAND_PARAMS.q_diag[1]),
+            "q_wheel_pos": max(0.01, STAND_PARAMS.q_diag[2]),
+            "q_wheel_vel": max(1e-4, STAND_PARAMS.q_diag[3]),
+            "r_torque1": max(0.1, STAND_PARAMS.r_diag[0]),
+            "r_torque2": max(0.1, STAND_PARAMS.r_diag[1]),
+            "velocity_kp": max(0.01, STAND_PARAMS.velocity_kp),
+            "velocity_ki": max(0.005, STAND_PARAMS.velocity_ki),
+            "pitch_trim": max(-0.5, min(0.8, STAND_PARAMS.pitch_trim)),
+            "pitch_lean_gain": max(0.005, STAND_PARAMS.pitch_lean_gain),
+            "yaw_damping": max(0.1, STAND_PARAMS.yaw_damping),
+            "crouch_duration": max(0.01, DEFAULT_PHASE_PARAMS.crouch_duration),
+            "extend_duration": max(0.01, DEFAULT_PHASE_PARAMS.extend_duration),
+            "flight_timeout": max(0.05, DEFAULT_PHASE_PARAMS.flight_timeout),
         })
 
-    # 将 trials 分配给 CPU 核数或指定的 workers 数量
     n_workers = min(os.cpu_count() or 1, config.workers)
     n_workers = max(1, min(n_workers, config.trials))
-    trials_per_worker = config.trials // n_workers
-    remain = config.trials % n_workers
+    if n_workers == 1 or config.trials <= n_workers:
+        print("Starting single-process optimization...")
+        _run_single_process_optimization(study, xml_path, config)
+    else:
+        # 将 trials 分配给 CPU 核数或指定的 workers 数量
+        trials_per_worker = config.trials // n_workers
+        remain = config.trials % n_workers
 
-    print(f"Starting multiprocessing optimization with {n_workers} workers...")
+        print(f"Starting multiprocessing optimization with {n_workers} workers...")
 
-    # 启动进程池
-    with multiprocessing.Pool(processes=n_workers) as pool:
-        args = []
-        for i in range(n_workers):
-            k = trials_per_worker + (1 if i < remain else 0)
-            if k > 0:
-                args.append((storage_url, study_name, xml_path, config, k))
+        # 启动进程池
+        with multiprocessing.Pool(processes=n_workers) as pool:
+            args = []
+            for i in range(n_workers):
+                k = trials_per_worker + (1 if i < remain else 0)
+                if k > 0:
+                    args.append((storage_url, study_name, xml_path, config, k))
 
-        pool.starmap(_optimize_worker, args)
+            pool.starmap(_optimize_worker, args)
 
-    # 收集优化结果重构 OptimizationResult
+    trials = _aggregate_trials(study)
+    if not trials:
+        raise RuntimeError("Optimization failed, no valid trials completed.")
+
+    best_trial = max(trials, key=lambda t: t.score)
+    return OptimizationResult(trials=tuple(trials), best_trial=best_trial)
+
+def _aggregate_trials(study: optuna.Study) -> list[OptimizationTrial]:
+    """从 Optuna Study 提取并重建 OptimizationTrial 列表。"""
     trials = []
     for t in study.trials:
         if t.state != optuna.trial.TrialState.COMPLETE:
@@ -448,12 +438,7 @@ def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> Optimizat
             failure_reason=failure_reason,
         )
         trials.append(opt_trial)
-
-    if not trials:
-        raise RuntimeError("Optimization failed, no valid trials completed.")
-
-    best_trial = max(trials, key=lambda t: t.score)
-    return OptimizationResult(trials=tuple(trials), best_trial=best_trial)
+    return trials
 
 
 
@@ -511,13 +496,15 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     system_logger.info(f"\n{'='*60}")
-    system_logger.info(f"Optimization Finished.")
+    system_logger.info("Optimization Finished.")
     system_logger.info(f"Best trial: score={result.best_trial.score:+.6f}")
     system_logger.info(f"  pitch={result.best_trial.metrics.max_abs_pitch:.6f}")
     system_logger.info(f"  dist={result.best_trial.metrics.forward_distance:.4f}")
     system_logger.info(f"  jump={result.best_trial.metrics.max_jump_height:.4f}")
     system_logger.info(f"  fell={result.best_trial.metrics.fell}")
     system_logger.info(f"  params={result.best_trial.params}")
+    print(f"[{len(result.trials)}/{args.trials}]")
+    print(f"Best trial: score={result.best_trial.score:+.6f}")
     return 0
 
 
