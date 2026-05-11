@@ -1,0 +1,73 @@
+<mujoco model="robot">
+  <option gravity="0 0 0" /><compiler angle="radian" />
+
+  <asset>
+    <mesh name="robot_link1_left" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/robot_link1_left.stl" scale="0.001 0.001 0.001" />
+    <mesh name="robot_wheel_left" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/robot_wheel_left.stl" scale="0.001 0.001 0.001" />
+    <mesh name="robot_link2_left" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/robot_link2_left.stl" scale="0.001 0.001 0.001" />
+    <mesh name="robot_link3_left" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/robot_link3_left.stl" scale="0.001 0.001 0.001" />
+    <mesh name="robot_link3_right" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/robot_link3_right.stl" scale="0.001 0.001 0.001" />
+    <mesh name="robot_link2_right" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/robot_link2_right.stl" scale="0.001 0.001 0.001" />
+    <mesh name="robot_link1_right" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/robot_link1_right.stl" scale="0.001 0.001 0.001" />
+    <mesh name="robot_wheel_right" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/robot_wheel_right.stl" scale="0.001 0.001 0.001" />
+    <mesh name="base_link" content_type="model/stl" file="/Users/cqc/wheel_robot/sim/robot/meshes/base_link.stl" scale="0.001 0.001 0.001" />
+  </asset>
+
+  <worldbody>
+    <body name="base_link">
+      <freejoint name="root" /><body name="base_link_rotated" quat="0.707107 0.707107 0 0">
+        <inertial pos="-0.000592631 0.00544205 -0.00434657" quat="0.516947 0.483648 0.517324 0.48086" mass="6.71465" diaginertia="0.0265595 0.0203652 0.0129812" />
+        <geom name="base_link_visual" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="base_link" />
+        <geom name="base_link_collision" type="mesh" mesh="base_link" contype="0" conaffinity="0" group="1" />
+        <body name="robot_link1_right" pos="-0.094 0.00541574 -0.0115236" quat="0.00432585 -0.70617 -0.708027 -0.00128968">
+          <inertial pos="-0.00708073 -0.00994034 0.0181839" quat="0.693629 -0.132567 -0.129918 0.696007" mass="0.253052" diaginertia="0.000159058 0.000146511 3.18341e-05" />
+          <joint name="robot_base_link_r9" pos="0 0 0" axis="0.002609 -0.999987 0.004304" range="0.261799 1.65806" actuatorfrcrange="-1000000 1000000" />
+          <geom name="robot_link1_right_visual" pos="-0.0196256 -0.0168878 0.0380255" quat="0.699974 -0.0934428 0.0967067 0.701393" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="robot_link1_right" />
+          <geom name="robot_link1_right_collision" pos="-0.0196256 -0.0168878 0.0380255" quat="0.699974 -0.0934428 0.0967067 0.701393" type="mesh" mesh="robot_link1_right" contype="0" conaffinity="0" group="1" />
+          <body name="robot_link2_right" pos="-0.0264062 -0.0147783 0.067569" quat="0 1 0 0">
+            <inertial pos="-0.0352886 -0.00760556 0.0415768" quat="0.657684 -0.228175 -0.259363 0.669417" mass="0.48089" diaginertia="0.00133755 0.00129496 6.34921e-05" />
+            <joint name="robot_link1_right_r6" pos="0 0 0" axis="-0.002609 -0.999987 0.004304" />
+            <geom name="robot_link2_right_visual" pos="-0.0186876 0.00214352 0.02201" quat="0.244868 -0.662371 -0.665152 -0.242647" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="robot_link2_right" />
+            <geom name="robot_link2_right_collision" pos="-0.0186876 0.00214352 0.02201" quat="0.244868 -0.662371 -0.665152 -0.242647" type="mesh" mesh="robot_link2_right" contype="0" conaffinity="0" group="1" />
+            <body name="robot_wheel_right" pos="-0.064179 0.00049284 0.0755978">
+              <inertial pos="3.72222e-05 0.0157102 -6.06128e-05" quat="0.608225 0.362104 0.363391 0.605715" mass="0.955221" diaginertia="0.00053215 0.000359112 0.000359111" />
+              <joint name="robot_link2_right_r7" pos="0 0 0" axis="-0.002609 -0.999987 0.004304" />
+              <geom name="robot_wheel_right_visual" pos="8.34907e-05 0.0319996 -0.00013773" quat="-0.00045408 0.244223 -0.00233365 0.969716" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="robot_wheel_right" />
+              <geom name="robot_wheel_right_collision" pos="8.34907e-05 0.0319996 -0.00013773" quat="-0.00045408 0.244223 -0.00233365 0.969716" type="mesh" mesh="robot_wheel_right" contype="0" conaffinity="0" group="1" />
+            </body>
+          <site name="marker_link23_right" pos="0.03324898 -0.01200193 0.01271023" size="0.005" type="sphere" rgba="1 0 0 1" /></body>
+        </body>
+        <body name="robot_link1_left" pos="0.094 0.00541575 -0.0115236" quat="0.00432585 -0.70617 -0.708027 -0.00128968">
+          <inertial pos="-0.00713292 0.0100594 0.0180978" quat="0.693629 -0.132567 -0.129918 0.696007" mass="0.253052" diaginertia="0.000159058 0.000146511 3.18341e-05" />
+          <joint name="robot_base_link_r1" pos="0 0 0" axis="0.002609 -0.999987 0.004304" range="0.261799 1.65806" actuatorfrcrange="-1000000 1000000" />
+          <geom name="robot_link1_left_visual" pos="-0.0197143 0.0171118 0.0378791" quat="0.0967067 -0.701393 -0.699974 -0.0934428" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="robot_link1_left" />
+          <geom name="robot_link1_left_collision" pos="-0.0197143 0.0171118 0.0378791" quat="0.0967067 -0.701393 -0.699974 -0.0934428" type="mesh" mesh="robot_link1_left" contype="0" conaffinity="0" group="1" />
+          <body name="robot_link2_left" pos="-0.0264845 0.0152214 0.0674398">
+            <inertial pos="-0.0352475 -0.00814722 -0.041509" quat="0.656911 0.224665 0.262837 0.670008" mass="0.48089" diaginertia="0.00133755 0.00129496 6.34921e-05" />
+            <joint name="robot_link1_left_r8" pos="0 0 0" axis="-0.002609 0.999987 -0.004304" />
+            <geom name="robot_link2_left_visual" pos="-0.018698 0.00185643 -0.0220272" quat="0.242647 0.665152 0.662371 -0.244868" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="robot_link2_left" />
+            <geom name="robot_link2_left_collision" pos="-0.018698 0.00185643 -0.0220272" quat="0.242647 0.665152 0.662371 -0.244868" type="mesh" mesh="robot_link2_left" contype="0" conaffinity="0" group="1" />
+            <body name="robot_wheel_left" pos="-0.064179 -0.00049285 -0.0755978" quat="0 1 0 0">
+              <inertial pos="-3.49326e-05 -0.0157102 7.27691e-05" quat="0.663757 -0.245627 -0.241879 0.663769" mass="0.955221" diaginertia="0.00053215 0.000359112 0.000359111" />
+              <joint name="robot_link2_left_r3" pos="0 0 0" axis="-0.002609 -0.999987 0.004304" />
+              <geom name="robot_wheel_left_visual" pos="-8.34967e-05 -0.0319996 0.000137736" quat="-0.419985 -0.00488104 0.907506 0.00463033" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="robot_wheel_left" />
+              <geom name="robot_wheel_left_collision" pos="-8.34967e-05 -0.0319996 0.000137736" quat="-0.419985 -0.00488104 0.907506 0.00463033" type="mesh" mesh="robot_wheel_left" contype="0" conaffinity="0" group="1" />
+            </body>
+          <site name="marker_link23_left" pos="0.03331163 -0.01199784 -0.01260681" size="0.005" type="sphere" rgba="1 0 0 1" /></body>
+        </body>
+        <body name="robot_link3_right" pos="-0.094 0.0432673 -0.0559452" quat="0.70617 0.00432585 -0.00128968 0.708027">
+          <inertial pos="-0.0156874 0.00291643 -0.0289349" quat="0.671331 0.224988 0.227282 0.668609" mass="0.0719071" diaginertia="3.74509e-05 3.42664e-05 3.61597e-06" />
+          <joint name="robot_base_link_r4" pos="0 0 0" axis="-0.002609 -0.999987 0.004304" />
+          <geom name="robot_link3_right_visual" pos="-0.0196795 0.00594004 -0.0258782" quat="0.669586 -0.224387 -0.227861 -0.670361" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="robot_link3_right" />
+          <geom name="robot_link3_right_collision" pos="-0.0196795 0.00594004 -0.0258782" quat="0.669586 -0.224387 -0.227861 -0.670361" type="mesh" mesh="robot_link3_right" contype="0" conaffinity="0" group="1" />
+        </body>
+        <body name="robot_link3_left" pos="0.094 0.0432673 -0.0559452" quat="0.00432585 -0.70617 -0.708027 -0.00128968">
+          <inertial pos="-0.015703 0.00308349 0.0289091" quat="0.668609 -0.227282 -0.224988 0.671331" mass="0.0719071" diaginertia="3.74509e-05 3.42664e-05 3.61597e-06" />
+          <joint name="robot_base_link_r2" pos="0 0 0" axis="-0.002609 0.999987 -0.004304" />
+          <geom name="robot_link3_left_visual" pos="-0.0197108 0.00605981 0.0258266" quat="0.670361 0.227861 0.224387 -0.669586" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="robot_link3_left" />
+          <geom name="robot_link3_left_collision" pos="-0.0197108 0.00605981 0.0258266" quat="0.670361 0.227861 0.224387 -0.669586" type="mesh" mesh="robot_link3_left" contype="0" conaffinity="0" group="1" />
+        </body>
+      </body>
+    </body>
+  <light pos="0 0 1.5" dir="0 0 -1" directional="true" /><geom name="floor" type="plane" size="0 0 1" pos="0 0 0" rgba="0.8 0.9 0.8 1" contype="1" conaffinity="1" /><body name="command_slider_body" pos="0 0 -10"><inertial mass="1e-6" pos="0 0 0" diaginertia="1e-9 1e-9 1e-9" /><joint name="cmd_linear_x" type="hinge" axis="1 0 0" damping="0" /><joint name="cmd_angular_z" type="hinge" axis="0 1 0" damping="0" /></body></worldbody>
+<actuator><motor name="act_robot_link2_left_r3" joint="robot_link2_left_r3" ctrllimited="true" ctrlrange="-1.0 1.0" gear="1" /><motor name="act_robot_link2_right_r7" joint="robot_link2_right_r7" ctrllimited="true" ctrlrange="-1.0 1.0" gear="1" /><motor name="act_robot_base_link_r1" joint="robot_base_link_r1" ctrllimited="true" ctrlrange="-3.5 3.5" gear="1" /><motor name="act_robot_base_link_r9" joint="robot_base_link_r9" ctrllimited="true" ctrlrange="-3.5 3.5" gear="1" /><motor name="cmd_linear_x" joint="cmd_linear_x" ctrllimited="true" ctrlrange="-1.0 1.0" gear="0" /><motor name="cmd_angular_z" joint="cmd_angular_z" ctrllimited="true" ctrlrange="-3.0 3.0" gear="0" /></actuator><equality><connect name="robot_link23_left_connect" body1="robot_link2_left" body2="robot_link3_left" anchor="0.03331163 -0.01199784 -0.01260681" solref="0.005 1" solimp="0.95 0.99 0.001 0.5 2" /><connect name="robot_link23_right_connect" body1="robot_link2_right" body2="robot_link3_right" anchor="0.03324898 -0.01200193 0.01271023" solref="0.005 1" solimp="0.95 0.99 0.001 0.5 2" /></equality></mujoco>

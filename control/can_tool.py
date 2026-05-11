@@ -67,11 +67,6 @@ def _normalize_legacy_motor_args(argv: list[str]) -> list[str]:
 
 
 def _run(args: argparse.Namespace) -> int:
-    commands = _commands_module()
-    protocol = _protocol_module()
-    motors = _motors_module()
-    safety = _safety_module()
-
     if args.command == "list-ports":
         for port in _dm_usbcan_module().list_serial_ports():
             print(port)
@@ -91,100 +86,142 @@ def _run(args: argparse.Namespace) -> int:
     bus = _make_bus(args)
     try:
         if args.command == "sniff":
-            _print_bus_config(args)
-            deadline = time.monotonic() + args.duration
-            while time.monotonic() < deadline:
-                received = bus.recv(timeout=min(safety.DEFAULT_PERIOD, max(0.0, deadline - time.monotonic())))
-                if received is not None:
-                    print(_format_received_frame(received))
-            return 0
-
-        if args.command == "imu" and args.imu_command == "read":
-            imu = motors.get_device("dm_imu")
-            print(f"imu {imu.name}: CAN=0x{imu.can_id:02X} MST=0x{imu.master_id:02X} mode={imu.mode}")
-            deadline = time.monotonic() + args.duration
-            while time.monotonic() < deadline:
-                received = bus.recv(timeout=min(safety.DEFAULT_PERIOD, max(0.0, deadline - time.monotonic())))
-                if received is not None:
-                    print(_format_received_frame(received))
-            return 0
-
-        if args.command == "scan" and args.scan_command == "motors":
-            _validate_scan_range(args.start_id, args.end_id)
-            for can_id in range(args.start_id, args.end_id + 1):
-                bus.send(protocol.standard_disable_frame(can_id))
-                print(f"probe tx id=0x{can_id:02X} disable")
-                deadline = time.monotonic() + args.timeout
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    received = bus.recv(timeout=remaining)
-                    if received is None:
-                        break
-                    print(_format_scan_received_frame(received, protocol))
-            return 0
-
+            return _run_sniff(args, bus)
+        if args.command == "imu":
+            return _run_imu(args, bus)
+        if args.command == "scan":
+            return _run_scan(args, bus)
         if args.command == "group":
-            print(f"group: duration={args.duration} period={args.period} max_test_torque={safety.MAX_TEST_TORQUE}")
-            for frame in commands.group_zero_frames():
-                print(f"target CAN=0x{frame.arbitration_id:03X}")
-            for name in ("dm4310_left", "dm4310_right", "dmh6215_left", "dmh6215_right"):
-                motor = motors.get_motor(name)
-                print(f"motor {motor.name}: CAN=0x{motor.can_id:02X} MST=0x{motor.master_id:02X} mode={motor.mode}")
-            if args.group_command == "zero":
-                print("group zero sends zero output frames only; it does not set zero position")
-                commands.run_group_zero(
-                    bus,
-                    duration=args.duration,
-                    period=args.period,
-                    telemetry=_make_telemetry_printer(protocol) if args.telemetry else None,
-                )
-                return 0
-            if args.group_command == "conservative-test":
-                print(f"conservative test max_duration={safety.MAX_NONZERO_DURATION}")
-                commands.run_group_conservative_test(bus, torque=args.torque, duration=args.duration, period=args.period)
-                return 0
-
+            return _run_group(args, bus)
         if args.command == "pair":
-            print("pair conservative-spin targets 0x02 and 0x04 only")
-            print(
-                f"velocity={args.velocity} wheel_velocity={args.wheel_velocity} torque={args.torque} "
-                f"duration={args.duration} period={args.period}"
-            )
-            print("finish path sends pair zero, then disables 0x02 and 0x04")
-            commands.run_pair_conservative_spin(
-                bus,
-                velocity=args.velocity,
-                wheel_velocity=args.wheel_velocity,
-                torque=args.torque,
-                duration=args.duration,
-                period=args.period,
-                telemetry=_make_telemetry_printer(protocol) if args.telemetry else None,
-            )
-            return 0
-
+            return _run_pair(args, bus)
         if args.command == "motor":
-            motor = motors.get_motor(args.motor)
-            print(f"motor {motor.name}: CAN=0x{motor.can_id:02X} MST=0x{motor.master_id:02X} mode={motor.mode}")
-            if args.motor_command == "enable":
-                duration = _validate_enable_duration(args.duration)
-                print(f"enable smoke test: sending enable for {duration:.3f}s, then disable")
-                bus.send(commands.single_motor_command_frame(args.motor, "enable"))
-                time.sleep(duration)
-                bus.send(commands.single_motor_command_frame(args.motor, "disable"))
-                return 0
-            if args.motor_command == "disable":
-                bus.send(commands.single_motor_command_frame(args.motor, "disable"))
-                return 0
-            if args.motor_command == "torque":
-                print(f"torque={args.torque} max_test_torque={safety.MAX_TEST_TORQUE} duration={args.duration}")
-                commands.run_torque_test(bus, args.motor, torque=args.torque, duration=args.duration, period=args.period)
-                return 0
+            return _run_motor(args, bus)
 
         raise ValueError("unsupported command")
     finally:
         bus.close()
+
+
+def _run_sniff(args: argparse.Namespace, bus) -> int:
+    safety = _safety_module()
+    _print_bus_config(args)
+    deadline = time.monotonic() + args.duration
+    while time.monotonic() < deadline:
+        received = bus.recv(timeout=min(safety.DEFAULT_PERIOD, max(0.0, deadline - time.monotonic())))
+        if received is not None:
+            print(_format_received_frame(received))
+    return 0
+
+
+def _run_imu(args: argparse.Namespace, bus) -> int:
+    motors = _motors_module()
+    safety = _safety_module()
+    if args.imu_command == "read":
+        imu = motors.get_device("dm_imu")
+        print(f"imu {imu.name}: CAN=0x{imu.can_id:02X} MST=0x{imu.master_id:02X} mode={imu.mode}")
+        deadline = time.monotonic() + args.duration
+        while time.monotonic() < deadline:
+            received = bus.recv(timeout=min(safety.DEFAULT_PERIOD, max(0.0, deadline - time.monotonic())))
+            if received is not None:
+                print(_format_received_frame(received))
+        return 0
+    raise ValueError(f"unsupported imu command: {args.imu_command}")
+
+
+def _run_scan(args: argparse.Namespace, bus) -> int:
+    protocol = _protocol_module()
+    if args.scan_command == "motors":
+        _validate_scan_range(args.start_id, args.end_id)
+        for can_id in range(args.start_id, args.end_id + 1):
+            bus.send(protocol.standard_disable_frame(can_id))
+            print(f"probe tx id=0x{can_id:02X} disable")
+            deadline = time.monotonic() + args.timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                received = bus.recv(timeout=remaining)
+                if received is None:
+                    break
+                print(_format_scan_received_frame(received, protocol))
+        return 0
+    raise ValueError(f"unsupported scan command: {args.scan_command}")
+
+
+def _run_group(args: argparse.Namespace, bus) -> int:
+    commands = _commands_module()
+    protocol = _protocol_module()
+    motors = _motors_module()
+    safety = _safety_module()
+
+    print(f"group: duration={args.duration} period={args.period} max_test_torque={safety.MAX_TEST_TORQUE}")
+    for frame in commands.group_zero_frames():
+        print(f"target CAN=0x{frame.arbitration_id:03X}")
+    for name in ("dm4310_left", "dm4310_right", "dmh6215_left", "dmh6215_right"):
+        motor = motors.get_motor(name)
+        print(f"motor {motor.name}: CAN=0x{motor.can_id:02X} MST=0x{motor.master_id:02X} mode={motor.mode}")
+        
+    if args.group_command == "zero":
+        print("group zero sends zero output frames only; it does not set zero position")
+        commands.run_group_zero(
+            bus,
+            duration=args.duration,
+            period=args.period,
+            telemetry=_make_telemetry_printer(protocol) if args.telemetry else None,
+        )
+        return 0
+    if args.group_command == "conservative-test":
+        print(f"conservative test max_duration={safety.MAX_NONZERO_DURATION}")
+        commands.run_group_conservative_test(bus, torque=args.torque, duration=args.duration, period=args.period)
+        return 0
+    raise ValueError(f"unsupported group command: {args.group_command}")
+
+
+def _run_pair(args: argparse.Namespace, bus) -> int:
+    commands = _commands_module()
+    protocol = _protocol_module()
+
+    print("pair conservative-spin targets 0x02 and 0x04 only")
+    print(
+        f"velocity={args.velocity} wheel_velocity={args.wheel_velocity} torque={args.torque} "
+        f"duration={args.duration} period={args.period}"
+    )
+    print("finish path sends pair zero, then disables 0x02 and 0x04")
+    commands.run_pair_conservative_spin(
+        bus,
+        velocity=args.velocity,
+        wheel_velocity=args.wheel_velocity,
+        torque=args.torque,
+        duration=args.duration,
+        period=args.period,
+        telemetry=_make_telemetry_printer(protocol) if args.telemetry else None,
+    )
+    return 0
+
+
+def _run_motor(args: argparse.Namespace, bus) -> int:
+    commands = _commands_module()
+    motors = _motors_module()
+    safety = _safety_module()
+
+    motor = motors.get_motor(args.motor)
+    print(f"motor {motor.name}: CAN=0x{motor.can_id:02X} MST=0x{motor.master_id:02X} mode={motor.mode}")
+    if args.motor_command == "enable":
+        duration = _validate_enable_duration(args.duration)
+        print(f"enable smoke test: sending enable for {duration:.3f}s, then disable")
+        bus.send(commands.single_motor_command_frame(args.motor, "enable"))
+        time.sleep(duration)
+        bus.send(commands.single_motor_command_frame(args.motor, "disable"))
+        return 0
+    if args.motor_command == "disable":
+        bus.send(commands.single_motor_command_frame(args.motor, "disable"))
+        return 0
+    if args.motor_command == "torque":
+        print(f"torque={args.torque} max_test_torque={safety.MAX_TEST_TORQUE} duration={args.duration}")
+        commands.run_torque_test(bus, args.motor, torque=args.torque, duration=args.duration, period=args.period)
+        return 0
+    raise ValueError(f"unsupported motor command: {args.motor_command}")
 
 
 def _make_bus(args: argparse.Namespace):
