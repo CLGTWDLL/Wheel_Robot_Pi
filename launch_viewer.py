@@ -32,7 +32,7 @@ def main():
         sys.exit(1)
 
     # Load URDF via MuJoCo (handles oversized mesh splitting) and preprocess
-    from sim.model_xml import _urdf_to_mjcf
+    from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _add_connection_markers
     tmp_dir = Path(tempfile.mkdtemp())
     converted_xml = _urdf_to_mjcf(urdf_path, tmp_dir)
 
@@ -44,23 +44,60 @@ def main():
 
     # Make mesh paths absolute so temp output dir can still find them
     asset = root.find("asset")
-    if asset is not None:
-        for mesh in asset.findall("mesh"):
-            f = mesh.get("file")
-            if f and not Path(f).is_absolute():
-                mesh.set("file", str((prepared_dir / f).resolve()))
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+        
+    for mesh in asset.findall("mesh"):
+        f = mesh.get("file")
+        if f and not Path(f).is_absolute():
+            mesh.set("file", str((prepared_dir / f).resolve()))
 
-    # Hardcode effort signs or default to 1.0 since VMC removed them
+    # Add environment assets (checkerboard floor and skybox)
+    ET.SubElement(asset, "texture", {
+        "name": "skybox", "type": "skybox", "builtin": "gradient",
+        "rgb1": "0.3 0.5 0.7", "rgb2": "0 0 0", "width": "512", "height": "512"
+    })
+    ET.SubElement(asset, "texture", {
+        "name": "checker", "type": "2d", "builtin": "checker",
+        "rgb1": "0.2 0.3 0.4", "rgb2": "0.1 0.2 0.3", "width": "512", "height": "512",
+        "mark": "cross", "markrgb": ".8 .8 .8"
+    })
+    ET.SubElement(asset, "material", {
+        "name": "grid", "texture": "checker", "texrepeat": "1 1",
+        "texuniform": "true", "reflectance": "0.2"
+    })
+
+    # Add environment into worldbody
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        worldbody = ET.SubElement(root, "worldbody")
+    
+    ET.SubElement(worldbody, "geom", {
+        "name": "floor", "type": "plane", "pos": "0 0 -1.0", 
+        "size": "0 0 1", "material": "grid"
+    })
+    ET.SubElement(worldbody, "light", {
+        "pos": "0 0 3", "dir": "0 0 -1", "directional": "true", "castshadow": "true"
+    })
+
+    # Visual settings
+    visual = root.find("visual")
+    if visual is None:
+        visual = ET.SubElement(root, "visual")
+    ET.SubElement(visual, "headlight", {"ambient": ".1 .1 .1", "diffuse": ".6 .6 .6", "specular": ".3 .3 .3"})
+    ET.SubElement(visual, "rgba", {"haze": ".15 .25 .35 1"})
+    ET.SubElement(visual, "global", {"azimuth": "120", "elevation": "-20"})
+
+    # Default gear to 1.0 since joint axes are now aligned in URDF
     actuator = ET.SubElement(root, "actuator")
     for jname in LEG_MOTOR_JOINTS:
-        gear = -1.0 if "旋转-1" in jname else 1.0
         ET.SubElement(actuator, "position", {
             "name": f"act_{jname}",
             "joint": jname,
             "kp": "5",
             "ctrllimited": "true",
             "ctrlrange": "-1.5 1.5",
-            "gear": str(gear),
+            "gear": "1.0",
         })
 
     # Disable gravity so the unconstrained passive links don't fall down
@@ -70,6 +107,10 @@ def main():
         root.insert(0, option)
     else:
         option.set("gravity", "0 0 0")
+
+    # Add the virtual connections (equality constraints) and site markers
+    _ensure_equality_constraints(root)
+    _add_connection_markers(root)
 
     out_xml = Path(tempfile.mkdtemp()) / "check_model.xml"
     tree.write(out_xml, encoding="utf-8", xml_declaration=False)

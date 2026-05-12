@@ -10,7 +10,6 @@ from sim.model_semantics import MODEL_SEMANTICS, WHEEL_RADIUS
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
 
 
-ROOT_QPOS = "0 0 -0.106281 0.952820 0 -0.303535 0"
 CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z")
 
 
@@ -70,7 +69,6 @@ def prepare_controlled_mujoco_xml(urdf_path: Path, cache_dir: Path | None = None
     _configure_geom_collisions(root)
     _add_wheel_collision_proxies(root)
     _replace_actuators(root)
-    _expand_keyframes(root)
     _ensure_equality_constraints(root)
     _add_connection_markers(root)
 
@@ -240,20 +238,6 @@ def _replace_actuators(root: ET.Element) -> None:
     root.append(actuator)
 
 
-def _expand_keyframes(root: ET.Element) -> None:
-    keyframe = root.find("keyframe")
-    if keyframe is None:
-        return
-
-    for key in keyframe.findall("key"):
-        qpos = key.get("qpos")
-        if qpos:
-            values = qpos.split()
-            if len(values) == 8:
-                key.set("qpos", f"{ROOT_QPOS} {qpos} 0 0")
-        key.set("qvel", " ".join("0" for _ in range(16)))
-
-
 def _ensure_equality_constraints(root: ET.Element) -> None:
     equality = root.find("equality")
     if equality is None:
@@ -272,7 +256,7 @@ def _ensure_equality_constraints(root: ET.Element) -> None:
             "name": "link23_left_connect",
             "body1": "link2_left",
             "body2": "link3_left",
-            "anchor": "0.03331163 -0.01199784 -0.01260681",
+            "anchor": "-0.02865 -0.00846 0.02459",
             "solref": "0.005 1",
             "solimp": "0.95 0.99 0.001 0.5 2",
         },
@@ -285,7 +269,7 @@ def _ensure_equality_constraints(root: ET.Element) -> None:
             "name": "link23_right_connect",
             "body1": "link2_right",
             "body2": "link3_right",
-            "anchor": "0.03324898 -0.01200193 0.01271023",
+            "anchor": "-0.02869 -0.00853 -0.02452",
             "solref": "0.005 1",
             "solimp": "0.95 0.99 0.001 0.5 2",
         },
@@ -308,7 +292,7 @@ def _add_connection_markers(root: ET.Element) -> None:
                     "site",
                     {
                         "name": "marker_link23_left",
-                        "pos": "0.03331163 -0.01199784 -0.01260681",
+                        "pos": "-0.02865 -0.00846 0.02459",
                         "size": "0.005",
                         "type": "sphere",
                         "rgba": "1 0 0 1",
@@ -321,7 +305,7 @@ def _add_connection_markers(root: ET.Element) -> None:
                     "site",
                     {
                         "name": "marker_link23_right",
-                        "pos": "0.03324898 -0.01200193 0.01271023",
+                        "pos": "-0.02869 -0.00853 -0.02452",
                         "size": "0.005",
                         "type": "sphere",
                         "rgba": "1 0 0 1",

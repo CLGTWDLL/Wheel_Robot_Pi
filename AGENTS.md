@@ -1,6 +1,79 @@
 # AGENTS.md
 
-本文件约束 `/Users/cqc/wheel_robot` 项目内的后续开发，包含仿真控制算法要求及实机硬件 CAN 调试规则。
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+## AI Agent Workflow Requirements (Grok Search)
+
+- **Search Before Execution**: Before solving problems, writing code, or designing solutions—especially when facing uncertain, complex, or experience-dependent tasks—you **must prioritize calling Grok Search MCP related Skills** (e.g., `grok-web-search`, `grok-web-research`) to retrieve information.
+- **Avoid Reinventing the Wheel**: Always try to search the web first for existing solutions, official documentation best practices, or proven viable approaches. Use the experience of others to guide and support your ideas.
+- **Solve Problems Efficiently**: Formulate execution plans based on authoritative and accurate information gathered from searches to complete tasks in the most efficient and direct way possible.
 
 ## 控制算法要求
 
@@ -104,12 +177,6 @@
    - 该 Python 脚本会执行许多关键“魔改”：比如将所有 mesh 设为纯视觉（visual-only）、强行注入 `sphere` 碰撞体作为轮子（比 cylinder 更利于 LQR 平滑控制）、强行注入 `root` freejoint、以及注入命令滑块等。
    - **禁止**仅凭阅读原始的 `.xml` 文件就得出系统结构结论，更不要盲目在原始 XML 中添加复杂的碰撞网格。任何针对仿真物理环境的判断，必须以 `sim/model_xml.py` 处理后的动态模型为准。
 
-## AI Agent Workflow Requirements (Grok Search)
-
-- **Search Before Execution**: Before solving problems, writing code, or designing solutions—especially when facing uncertain, complex, or experience-dependent tasks—you **must prioritize calling Grok Search MCP related Skills** (e.g., `grok-web-search`, `grok-web-research`) to retrieve information.
-- **Avoid Reinventing the Wheel**: Always try to search the web first for existing solutions, official documentation best practices, or proven viable approaches. Use the experience of others to guide and support your ideas.
-- **Solve Problems Efficiently**: Formulate execution plans based on authoritative and accurate information gathered from searches to complete tasks in the most efficient and direct way possible.
-
 ## 实机硬件 CAN 配置与调试规则
 
 ### 电机与 IMU CAN 配置
@@ -175,3 +242,8 @@
 - 保存参数只能在失能状态下生效，会一次性写入当前全部参数到 flash；不要频繁执行保存参数命令。
 - 控制模式寄存器 `RID=0x0A`：`1=MIT`、`2=位置速度`、`3=速度`、`4=力位混控`。通过 CAN 切换模式会清零位置、速度、MIT 扭矩前馈、`kp`、`kd` 等命令值；未保存则掉电丢失。
 - 切换到位置类控制前，应尽量在零速状态下进行，并确认当前位置，避免位置突变造成冲击。
+
+## 文件与目录规范
+
+- **测试文件**：所有的测试代码和文件必须统一写入 `tests/` 目录下。
+- **临时文件**：所有的临时文件必须写入 `tmp/` 目录下。并且，一旦使用完毕或不再需要，必须在当前会话结束前主动清理/删除这些临时文件，以保持工作区整洁。

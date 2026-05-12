@@ -45,9 +45,6 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
     model_path = prepare_controlled_mujoco_xml(xml_path, cache_dir=config.cache_dir)
     model = mujoco.MjModel.from_xml_path(str(model_path))
     data = mujoco.MjData(model)
-    key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "link23_connected_stand")
-    if key_id != -1:
-        mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
 
     initial_state = extract_sim_state(model, data)

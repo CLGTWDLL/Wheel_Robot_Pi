@@ -57,7 +57,7 @@ def main():
         ctrl_history.append(ctrl.copy())
         return ctrl
 
-    xml_path = Path("sim/轮腿v1/轮腿v1.xml")
+    xml_path = Path("sim/robot/robot.urdf")
     config = RolloutConfig(duration=args.duration, scenario="stand")
     
     # Just to print initial state
@@ -68,9 +68,6 @@ def main():
     m_path = prepare_controlled_mujoco_xml(xml_path, cache_dir=config.cache_dir)
     m = mujoco.MjModel.from_xml_path(str(m_path))
     d = mujoco.MjData(m)
-    key_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_KEY, "link23_connected_stand")
-    if key_id != -1:
-        mujoco.mj_resetDataKeyframe(m, d, key_id)
     mujoco.mj_forward(m, d)
     initial_state = extract_sim_state(m, d)
     print(f"Initial Pitch: {initial_state.pitch:.4f} rad")

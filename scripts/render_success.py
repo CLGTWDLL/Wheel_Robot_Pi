@@ -6,13 +6,11 @@ from sim.controllers.default_params import STAND_PARAMS
 import numpy as np
 import cv2
 
-xml_path = Path("sim/轮腿v1/轮腿v1.xml")
+xml_path = Path("sim/robot/robot.urdf")
 from sim.model_xml import prepare_controlled_mujoco_xml
 m_path = prepare_controlled_mujoco_xml(xml_path, cache_dir=Path(".cache"))
 m = mujoco.MjModel.from_xml_path(str(m_path))
 d = mujoco.MjData(m)
-
-mujoco.mj_resetDataKeyframe(m, d, mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_KEY, "link23_connected_stand"))
 mujoco.mj_forward(m, d)
 
 params = STAND_PARAMS
@@ -39,4 +37,3 @@ for frame in frames:
     out.write(frame)
 out.release()
 print("Saved artifacts/success_balance.mp4")
-

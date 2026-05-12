@@ -17,7 +17,6 @@ import mujoco
 import numpy as np
 
 from sim.model_xml import prepare_controlled_mujoco_xml
-from sim.launch_mujoco import apply_home_keyframe, HOME_KEYFRAME
 
 
 def compute_mesh_local_bounding_box(model: mujoco.MjModel, mesh_id: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -36,24 +35,22 @@ def compute_mesh_local_bounding_box(model: mujoco.MjModel, mesh_id: int) -> tupl
 
 
 def generate_markdown() -> str:
-    xml_path = project_root / "sim" / "轮腿v1" / "轮腿v1.xml"
-    if not xml_path.is_file():
-        return f"Error: {xml_path} not found."
+    model_path = project_root / "sim" / "robot" / "robot.urdf"
+    if not model_path.is_file():
+        return f"Error: {model_path} not found."
 
     # Use the preprocessing pipeline to get the true simulation model
-    prepared_xml = prepare_controlled_mujoco_xml(xml_path)
+    prepared_xml = prepare_controlled_mujoco_xml(model_path)
     model = mujoco.MjModel.from_xml_path(str(prepared_xml))
     data = mujoco.MjData(model)
     
-    # Apply the target keyframe that represents the standing posture
-    apply_home_keyframe(model, data, mujoco)
     mujoco.mj_kinematics(model, data)
     mujoco.mj_comPos(model, data)
 
     lines = [
         "# Robot Structure and Kinematics",
         "",
-        f"> **IMPORTANT:** This document represents the robot state AFTER preprocessing and applying the `{HOME_KEYFRAME}` keyframe. **Do not use the raw `轮腿v1.xml` file to judge global positions or robot posture, as its default CAD pose is invalid.**",
+        "> **IMPORTANT:** This document represents the robot state AFTER preprocessing `sim/robot/robot.urdf`. Use the prepared MuJoCo model for simulation structure checks, not the raw URDF alone.",
         "",
         "## Bodies and Kinematic Tree",
         ""

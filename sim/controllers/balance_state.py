@@ -20,7 +20,6 @@ def balance_tangent_state(model: object, data: object, state: SimState) -> np.nd
     del model, data
 
     wheel_names = MODEL_SEMANTICS.wheel_joints
-    # 使用方向符号统一轮速方向: 右轮正转=后退, 取负后=前进
     forward_wheel_positions = [
         WHEEL_FORWARD_SIGNS[name] * state.wheel_positions[_side_key(name)]
         for name in wheel_names

@@ -15,6 +15,7 @@ LEG_HEIGHT_BODIES = {
 }
 
 BASE_BODY_NAME = "base_link"
+LEG_HEIGHT_JACOBIAN_EPS = 1e-4
 
 
 @dataclass(frozen=True)
@@ -43,10 +44,8 @@ class VmcController:
 
     def leg_height_jacobian(self, model: mujoco.MjModel, data: mujoco.MjData) -> dict[str, float]:
         """Return dh/dq for each active leg motor using the current MuJoCo geometry."""
-        addresses = model_addresses(model)
-        rows = _leg_height_jacobian_rows(model, data)
         return {
-            side: rows[side][addresses.joint_qvel[joint_name]]
+            side: _closed_loop_leg_motor_jacobian(model, data, joint_name, wheel_body)
             for side, (joint_name, wheel_body) in LEG_HEIGHT_BODIES.items()
         }
 
@@ -98,12 +97,9 @@ class VmcController:
         total_mass = float(np.sum(model.body_mass))
         gravity = abs(float(model.opt.gravity[2]))
         height_jacobian_rows = _leg_height_jacobian_rows(model, data)
-        # The open-chain mj_jac ignores the 5-bar linkage equality constraints, 
-        # producing the wrong sign (+0.039). The true closed-loop dh/dq is negative,
-        # meaning a negative torque extends the leg.
         jacobian = {
-            "left": -0.0031,
-            "right": -0.0031
+            side: _closed_loop_leg_motor_jacobian(model, data, joint_name, wheel_body)
+            for side, (joint_name, wheel_body) in LEG_HEIGHT_BODIES.items()
         }
         
         neutral_offsets = self._neutral_offsets(model, data)
@@ -118,8 +114,13 @@ class VmcController:
             if phase == JumpPhase.FLIGHT:
                 gravity_torque = 0.0
             else:
-                # True torque required to support 10.88 N (half of 2.22 kg) is -0.034 Nm
-                gravity_torque = -0.034 * self.params.gravity_compensation_scale
+                gravity_torque = (
+                    jacobian[side]
+                    * total_mass
+                    * gravity
+                    / len(LEG_HEIGHT_BODIES)
+                    * self.params.gravity_compensation_scale
+                )
                 
             spring_force = self.params.kp_height * height_error - damping * vertical_velocity
             control[act_idx] = gravity_torque + jacobian[side] * spring_force
@@ -154,18 +155,45 @@ def _leg_height(model: mujoco.MjModel, data: mujoco.MjData, wheel_body: str) -> 
     if base_id == -1 or wheel_id == -1:
         raise ValueError("missing base or wheel body for VMC height geometry")
         
-    # CRITICAL: Measure height along the local Z axis of the base to decouple VMC from pitch!
-    # Using world Z causes the measured height to drop as the robot leans (Z = L * cos(pitch)).
     pos_base = data.xipos[base_id]
     pos_wheel = data.xipos[wheel_id]
     delta_pos = pos_base - pos_wheel
     
-    # Get the local Z axis (up vector) of the base link
-    base_mat = data.ximat[base_id].reshape(3, 3)
+    # Measure along the body frame, not the diagonalized inertial principal-axis frame.
+    base_mat = data.xmat[base_id].reshape(3, 3)
     local_z_axis = base_mat[:, 2]
-    
-    # Project the vector from wheel to base onto the base's local Z axis
     return float(np.dot(delta_pos, local_z_axis))
+
+
+def _closed_loop_leg_motor_jacobian(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    joint_name: str,
+    wheel_body: str,
+) -> float:
+    addresses = model_addresses(model)
+    qpos_index = addresses.joint_qpos[joint_name]
+    original_qpos = data.qpos.copy()
+    original_qvel = data.qvel.copy()
+    original_ctrl = data.ctrl.copy()
+    try:
+        data.qpos[qpos_index] = original_qpos[qpos_index] + LEG_HEIGHT_JACOBIAN_EPS
+        mujoco.mj_forward(model, data)
+        height_plus = _leg_height(model, data, wheel_body)
+
+        data.qpos[qpos_index] = original_qpos[qpos_index] - LEG_HEIGHT_JACOBIAN_EPS
+        mujoco.mj_forward(model, data)
+        height_minus = _leg_height(model, data, wheel_body)
+    finally:
+        data.qpos[:] = original_qpos
+        data.qvel[:] = original_qvel
+        data.ctrl[:] = original_ctrl
+        mujoco.mj_forward(model, data)
+
+    jacobian = (height_plus - height_minus) / (2.0 * LEG_HEIGHT_JACOBIAN_EPS)
+    if not np.isfinite(jacobian):
+        raise ValueError("VMC closed-loop leg motor jacobian must be finite")
+    return float(jacobian)
 
 
 def _average_leg_height_velocity(model: mujoco.MjModel, data: mujoco.MjData) -> float:

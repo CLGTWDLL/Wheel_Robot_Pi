@@ -26,7 +26,6 @@ from sim.state import extract_sim_state
 from sim.logger import setup_system_logger, TelemetryLogger, cleanup_old_logs
 
 
-HOME_KEYFRAME = "link23_connected_stand"
 CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z")
 
 
@@ -105,19 +104,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def apply_home_keyframe(model: Any, data: Any, mujoco_module: Any) -> None:
-    key_id = mujoco_module.mj_name2id(model, mujoco_module.mjtObj.mjOBJ_KEY, HOME_KEYFRAME)
-    if key_id != -1:
-        mujoco_module.mj_resetDataKeyframe(model, data, key_id)
-
-
 def build_controlled_model(xml_path: Path, cache_dir: Path | None = None) -> tuple[Any, Any]:
     import mujoco
 
     prepared_xml = prepare_controlled_mujoco_xml(xml_path, cache_dir=cache_dir)
     model = mujoco.MjModel.from_xml_path(str(prepared_xml))
     data = mujoco.MjData(model)
-    apply_home_keyframe(model, data, mujoco)
     mujoco.mj_forward(model, data)
     return model, data
 
@@ -136,9 +128,6 @@ def create_controlled_controller(controller_name: str, scenario: str) -> Control
     if controller_name == "vmc":
         return VmcController(STAND_PARAMS.vmc, phase_machine=phase_machine)
     if controller_name == "lqr_vmc":
-        if scenario == "drive":
-            # STAND_THEN_DRIVE_PARAMS 基于旧的 WHEEL_FORWARD_SIGNS 优化, 待重新优化
-            return CombinedController(STAND_PARAMS, phase_machine=phase_machine)
         return CombinedController(STAND_PARAMS, phase_machine=phase_machine)
     raise ValueError(f"unsupported controller: {controller_name}")
 
@@ -297,7 +286,6 @@ def main() -> None:
         prepared_xml = prepare_controlled_mujoco_xml(args.xml) if args.show_collision else prepare_mujoco_xml(args.xml)
         model = mujoco.MjModel.from_xml_path(str(prepared_xml))
         data = mujoco.MjData(model)
-        apply_home_keyframe(model, data, mujoco)
         mujoco.mj_forward(model, data)
         system_logger.info("Viewer mode started. No telemetry will be recorded.")
         with mujoco.viewer.launch_passive(model, data) as viewer:

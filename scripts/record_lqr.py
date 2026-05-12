@@ -31,15 +31,10 @@ def main():
     
     controller = CombinedController(params)
 
-    xml_path = Path("sim/轮腿v1/轮腿v1.xml")
+    xml_path = Path("sim/robot/robot.urdf")
     m_path = prepare_controlled_mujoco_xml(xml_path)
     m = mujoco.MjModel.from_xml_path(str(m_path))
     d = mujoco.MjData(m)
-    
-    # Use the stand keyframe
-    key_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_KEY, "link23_connected_stand")
-    if key_id != -1:
-        mujoco.mj_resetDataKeyframe(m, d, key_id)
     mujoco.mj_forward(m, d)
 
     renderer = mujoco.Renderer(m, 480, 640)

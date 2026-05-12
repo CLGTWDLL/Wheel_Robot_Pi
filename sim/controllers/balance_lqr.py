@@ -55,31 +55,18 @@ def _reduced_balance_system(model: Any, data: Any) -> tuple[np.ndarray, np.ndarr
     a = p @ result.a @ np.linalg.pinv(p)
     b = p @ result.b @ s
     
-    # NEW: Force B matrix to be perfectly symmetric across wheels.
-    # Small asymmetries due to contact solver / floating point can cause
-    # LQR to exploit differential torque to fix pitch (since yaw is unpenalized),
-    # leading to massive opposite wheel torques.
-    b_avg = (b[:, 0] + b[:, 1]) / 2.0
-    b[:, 0] = b_avg
-    b[:, 1] = b_avg
-
-    # FULLY ANALYTICAL HACK: Inject analytical inverted pendulum physics into A and B matrices.
-    L = 0.137  # Height of CoM above wheel center
+    # Use the current processed MuJoCo model for the reduced inverted-pendulum
+    # approximation; raw URDF/XML constants drift when preprocessing changes.
+    L = _com_height_above_wheels(model, data)
+    effective_mass = max(float(np.sum(model.body_mass)), 1e-6)
     g = 9.81
     
     # CRITICAL: The control loop runs at 500Hz (dt=0.002), but model.opt.timestep is 2000Hz (0.0005).
     # We must solve the discrete ARE for the CONTROL timestep, not the simulation timestep!
     control_dt = 0.002
-    sim_dt = model.opt.timestep
     dt = control_dt
     
-    # Analytical wheel acceleration (no-slip assumption)
-    # Mass of base = 1.7kg, Mass of wheel = 0.25kg, R = 0.036m
-    # 1.0 Nm on ONE wheel gives F = 1.0 / 0.036 = 27.7N
-    # M_eff = M_base + 2 * M_wheel = ~2.2kg
-    # a_x = F / M_eff = 27.7 / 2.2 = 12.6 m/s^2
-    # b_vel = a_x * dt = 12.6 * 0.002 = 0.0252 m/s per Nm per control step
-    b_vel = 0.0252
+    b_vel = (1.0 / WHEEL_RADIUS) / effective_mass * dt
 
     # Reconstruct A matrix purely from analytical pendulum dynamics for control_dt
     a_new = np.zeros((4, 4))
@@ -106,6 +93,26 @@ def _reduced_balance_system(model: Any, data: Any) -> tuple[np.ndarray, np.ndarr
     if a.shape != (4, 4) or b.shape != (4, 2) or not np.all(np.isfinite(a)) or not np.all(np.isfinite(b)):
         raise ValueError("reduced balance system must be finite with shapes (4, 4) and (4, 2)")
     return a, b
+
+
+def _com_height_above_wheels(model: Any, data: Any) -> float:
+    mujoco.mj_forward(model, data)
+    body_masses = np.asarray(model.body_mass, dtype=float)
+    total_mass = float(np.sum(body_masses))
+    if total_mass <= 0.0:
+        raise ValueError("model mass must be positive")
+    com_z = float(np.sum(body_masses * data.xipos[:, 2]) / total_mass)
+    wheel_ids = [
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        for body_name in ("wheel_left", "wheel_right")
+    ]
+    if any(body_id == -1 for body_id in wheel_ids):
+        raise ValueError("missing wheel bodies for LQR pendulum geometry")
+    wheel_z = float(np.mean([data.xipos[body_id, 2] for body_id in wheel_ids]))
+    height = com_z - wheel_z
+    if not np.isfinite(height) or abs(height) < 1e-6:
+        raise ValueError("invalid CoM height above wheels for LQR")
+    return abs(float(height))
 
 
 def _balance_state_selection(model: Any) -> np.ndarray:
