@@ -32,7 +32,7 @@ def main():
         sys.exit(1)
 
     # Load URDF via MuJoCo (handles oversized mesh splitting) and preprocess
-    from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _add_connection_markers
+    from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _add_connection_markers, _configure_geom_collisions
     tmp_dir = Path(tempfile.mkdtemp())
     converted_xml = _urdf_to_mjcf(urdf_path, tmp_dir)
 
@@ -88,7 +88,9 @@ def main():
     ET.SubElement(visual, "rgba", {"haze": ".15 .25 .35 1"})
     ET.SubElement(visual, "global", {"azimuth": "120", "elevation": "-20"})
 
-    # Default gear to 1.0 since joint axes are now aligned in URDF
+    # Both main motor axes (base_link_rot-1 and rot-2) have identical orientations (Y roughly -1.0).
+    # Therefore, to swing both legs forward symmetrically, they must both receive the same sign of torque.
+    # We use gear=1.0 for both. The previous gear=-1.0 caused the right leg to swing backwards.
     actuator = ET.SubElement(root, "actuator")
     for jname in LEG_MOTOR_JOINTS:
         ET.SubElement(actuator, "position", {
@@ -108,6 +110,9 @@ def main():
     else:
         option.set("gravity", "0 0 0")
 
+    # Disable mesh collisions (avoid internal tension from non-convex CAD overlaps)
+    _configure_geom_collisions(root)
+
     # Add the virtual connections (equality constraints) and site markers
     _ensure_equality_constraints(root)
     _add_connection_markers(root)
@@ -124,7 +129,6 @@ def main():
     for act_id in range(model.nu):
         if model.actuator_trntype[act_id] == mujoco.mjtTrn.mjTRN_JOINT:
             j_id = model.actuator_trnid[act_id, 0]
-            # When gear is -1, ctrl * (-1) = qpos, so ctrl = qpos / (-1)
             gear = model.actuator_gear[act_id, 0]
             if gear != 0:
                 data.ctrl[act_id] = data.qpos[model.jnt_qposadr[j_id]] / gear
@@ -138,8 +142,6 @@ def main():
         print("=" * 60)
         
         while viewer.is_running():
-            # If you want to enable physics stepping from the UI, you can check if it's paused.
-            # However, for just inspecting the model or dragging sliders, we just sync the viewer.
             mujoco.mj_step(model, data)
             viewer.sync()
             time.sleep(float(model.opt.timestep))

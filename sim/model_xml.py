@@ -269,7 +269,7 @@ def _ensure_equality_constraints(root: ET.Element) -> None:
             "name": "link23_right_connect",
             "body1": "link2_right",
             "body2": "link3_right",
-            "anchor": "-0.02869 -0.00853 -0.02452",
+            "anchor": "-0.02869 0.00853 0.02452",
             "solref": "0.005 1",
             "solimp": "0.95 0.99 0.001 0.5 2",
         },
@@ -305,7 +305,7 @@ def _add_connection_markers(root: ET.Element) -> None:
                     "site",
                     {
                         "name": "marker_link23_right",
-                        "pos": "-0.02869 -0.00853 -0.02452",
+                        "pos": "-0.02869 0.00853 0.02452",
                         "size": "0.005",
                         "type": "sphere",
                         "rgba": "1 0 0 1",
