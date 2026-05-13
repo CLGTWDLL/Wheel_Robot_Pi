@@ -77,9 +77,9 @@ def extract_sim_state(model: mujoco.MjModel, data: mujoco.MjData) -> SimState:
         base_quaternion=base_quaternion,
         base_linear_velocity=np.array(data.qvel[root_qvel : root_qvel + 3], dtype=float),
         base_angular_velocity=base_angular_velocity,
-        # 绕 Y 轴的旋转 (Pitch) 及其角速度 wy — quat=[0,1,0,0] 下的倾倒轴
+        # 绕本体 X 轴的倾倒角 (与轮轴平行)。约定: pitch > 0 = 向前倾 (CoM 向 +Y 方向移)。
         pitch=_pitch_from_quaternion(base_quaternion),
-        pitch_rate=float(base_angular_velocity[1]),
+        pitch_rate=-float(base_angular_velocity[0]),
         wheel_positions={side: float(data.qpos[addresses.joint_qpos[name]]) for side, name in wheel_names.items()},
         wheel_velocities={side: float(data.qvel[addresses.joint_qvel[name]]) for side, name in wheel_names.items()},
         leg_joint_positions={
@@ -101,6 +101,8 @@ def _actuator_for_joint(model: mujoco.MjModel, joint_id: int) -> int:
 
 def _pitch_from_quaternion(quaternion: np.ndarray) -> float:
     w, x, y, z = quaternion
-    # 提取绕本地 Y 轴的旋转 (Pitch)
-    sinp = 2.0 * (w * y - z * x)
-    return float(np.arcsin(np.clip(sinp, -1.0, 1.0)))
+    # 绕本体 X 轴的旋转 (atan2 形式)。负号使得 pitch > 0 对应"前倾"
+    # (CoM 向 +Y 方向倾，与标准倒立摆 LQR 约定一致: 前倾时驱动轮子向前接住)。
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    return float(-np.arctan2(sinr_cosp, cosr_cosp))

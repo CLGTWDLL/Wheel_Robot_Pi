@@ -27,7 +27,7 @@ for jname in LEG_MOTOR_JOINTS:
         "kp": "5",
         "ctrllimited": "true",
         "ctrlrange": "-1.5 1.5",
-        "gear": "1.0", # SET BOTH TO 1.0
+        "gear": "1.0",
     })
 
 option = root.find("option")

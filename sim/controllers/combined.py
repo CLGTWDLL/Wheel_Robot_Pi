@@ -140,23 +140,24 @@ class CombinedController:
         current_wheel_pos = float(current_tangent[2])
         current_wheel_vel = float(current_tangent[3])
         velocity_error = self.params.target_velocity - current_wheel_vel
-        
+
         # 积分只在没有饱和时累加，防止积分饱和 (anti-windup)
         max_lean = 0.2
         pitch_p = self.params.pitch_lean_gain * velocity_error
         pitch_i = self.params.velocity_ki * self._velocity_integral
-        
+
         pitch_lean = pitch_p + pitch_i
-        
+
         if -max_lean < pitch_lean < max_lean:
             self._velocity_integral += velocity_error * dt
 
         pitch_lean = np.clip(pitch_lean, -max_lean, max_lean)
         self._lqr_controller.target[0] = self.params.pitch_trim + pitch_lean
-        
-        # 当处于运动模式时，持续同步目标位置到当前位置，彻底消除位置环的“橡皮筋”效应。
-        # 始终同步目标位置到当前位置，彻底消除位置环的“橡皮筋”效应。
-        self._lqr_controller.target[2] = current_wheel_pos
+
+        # 运动模式: 同步目标位置到当前位置，避免位置环"橡皮筋"。
+        # 站立模式 (target_velocity≈0): 保持初始目标位置, 启用 LQR 位置闭环消除漂移。
+        if abs(self.params.target_velocity) > 1e-4:
+            self._lqr_controller.target[2] = current_wheel_pos
 
         self._lqr_controller.target[3] = self.params.target_velocity
 

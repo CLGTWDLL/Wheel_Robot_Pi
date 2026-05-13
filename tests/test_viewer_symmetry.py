@@ -100,10 +100,7 @@ def main():
             "kp": "5",
             "ctrllimited": "true",
             "ctrlrange": "-1.5 1.5",
-            # We use 1.0 for both here so they receive identical control values 
-            # OR we use the gear from launch_viewer if it's meant to compensate for reversed axes.
-            # Let's keep the identical configuration as launch_viewer.py to show the asymmetry
-            "gear": "-1.0" if ("旋转-1" in jname or "rot-1" in jname) else "1.0",
+            "gear": "1.0",
         })
 
     option = root.find("option")

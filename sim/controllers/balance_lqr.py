@@ -118,9 +118,9 @@ def _com_height_above_wheels(model: Any, data: Any) -> float:
 def _balance_state_selection(model: Any) -> np.ndarray:
     addresses = model_addresses(model)
     p = np.zeros((4, 2 * model.nv))
-    # 与 extract_sim_state()/balance_tangent_state() 保持一致: pitch 是局部 Y 轴倾角。
-    pitch_index = addresses.root_qvel + 4
-    pitch_rate_index = model.nv + addresses.root_qvel + 4
+    # 与 extract_sim_state()/balance_tangent_state() 保持一致: pitch 是本体 X 轴倾角（与轮轴平行）。
+    pitch_index = addresses.root_qvel + 3
+    pitch_rate_index = model.nv + addresses.root_qvel + 3
     wheel_dof_indices = [addresses.joint_qvel[name] for name in MODEL_SEMANTICS.wheel_joints]
 
     p[0, pitch_index] = 1.0

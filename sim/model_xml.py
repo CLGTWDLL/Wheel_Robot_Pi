@@ -67,10 +67,11 @@ def prepare_controlled_mujoco_xml(urdf_path: Path, cache_dir: Path | None = None
     _ensure_root_freejoint(root)
     _ensure_command_slider_joints(root)
     _configure_geom_collisions(root)
-    _add_wheel_collision_proxies(root)
+    _add_collision_proxies(root)
     _replace_actuators(root)
     _ensure_equality_constraints(root)
     _add_connection_markers(root)
+    _ensure_standing_keyframe(root)
 
     output_path = output_root / f"{urdf_path.stem}_controlled.xml"
     tree.write(output_path, encoding="utf-8", xml_declaration=False)
@@ -96,25 +97,55 @@ def _ensure_world_environment(root: ET.Element) -> None:
     if worldbody is None:
         return
 
-    # Add light if not present
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+
+    if asset.find("texture[@name='skybox']") is None:
+        ET.SubElement(asset, "texture", {
+            "name": "skybox", "type": "skybox", "builtin": "gradient",
+            "rgb1": "0.3 0.5 0.7", "rgb2": "0 0 0", "width": "512", "height": "512",
+        })
+    if asset.find("texture[@name='checker']") is None:
+        ET.SubElement(asset, "texture", {
+            "name": "checker", "type": "2d", "builtin": "checker",
+            "rgb1": "0.2 0.3 0.4", "rgb2": "0.1 0.2 0.3", "width": "512", "height": "512",
+            "mark": "cross", "markrgb": ".8 .8 .8",
+        })
+    if asset.find("material[@name='grid']") is None:
+        ET.SubElement(asset, "material", {
+            "name": "grid", "texture": "checker", "texrepeat": "1 1",
+            "texuniform": "true", "reflectance": "0.2",
+        })
+
     if worldbody.find("light") is None:
-        ET.SubElement(worldbody, "light", {"pos": "0 0 1.5", "dir": "0 0 -1", "directional": "true"})
+        ET.SubElement(worldbody, "light", {
+            "pos": "0 0 3", "dir": "0 0 -1", "directional": "true", "castshadow": "true",
+        })
 
-    # Add floor if not present
-    if not any(g.get("name") == "floor" for g in worldbody.findall("geom")):
-        ET.SubElement(
-            worldbody,
-            "geom",
-            {"name": "floor", "type": "plane", "size": "0 0 1", "pos": "0 0 0", "rgba": "0.8 0.9 0.8 1"},
-        )
-
-    # Disable gravity
-    option = root.find("option")
-    if option is None:
-        option = ET.Element("option", {"gravity": "0 0 0"})
-        root.insert(0, option)
+    existing_floor = next((g for g in worldbody.findall("geom") if g.get("name") == "floor"), None)
+    if existing_floor is None:
+        ET.SubElement(worldbody, "geom", {
+            "name": "floor", "type": "plane", "size": "0 0 1", "pos": "0 0 0", "material": "grid",
+        })
     else:
-        option.set("gravity", "0 0 0")
+        existing_floor.set("material", "grid")
+        if "rgba" in existing_floor.attrib:
+            del existing_floor.attrib["rgba"]
+
+    visual = root.find("visual")
+    if visual is None:
+        visual = ET.SubElement(root, "visual")
+    if visual.find("headlight") is None:
+        ET.SubElement(visual, "headlight", {"ambient": ".1 .1 .1", "diffuse": ".6 .6 .6", "specular": ".3 .3 .3"})
+    if visual.find("rgba") is None:
+        ET.SubElement(visual, "rgba", {"haze": ".15 .25 .35 1"})
+    if visual.find("global") is None:
+        ET.SubElement(visual, "global", {"azimuth": "120", "elevation": "-20"})
+
+    # Use MuJoCo default gravity (0 0 -9.81). Only insert an <option> if absent.
+    if root.find("option") is None:
+        root.insert(0, ET.Element("option", {"gravity": "0 0 -9.81"}))
 
 
 def _ensure_root_freejoint(root: ET.Element) -> None:
@@ -178,31 +209,114 @@ def _configure_geom_collisions(root: ET.Element) -> None:
                 geom.set("conaffinity", "1")
                 geom.set("group", "3")
 
-def _add_wheel_collision_proxies(root: ET.Element) -> None:
-    for body_name in ("wheel_left", "wheel_right"):
+def _add_collision_proxies(root: ET.Element) -> None:
+    """Add simple collision primitives to all robot bodies.
+
+    Mesh geoms are visual-only (contype=0, conaffinity=0).  These proxies
+    provide lightweight collision with the ground (conaffinity=1) without
+    internal self-collision (contype=0).
+    """
+    # --- Collision proxy definitions ---
+    # Each entry: body_name -> (type, size, pos, quat_or_None, friction)
+    # Capsules: size="radius half-length", oriented along local X by default.
+    # For MuJoCo capsules the cylinder axis is along Z in the geom frame,
+    # so we use quat to rotate as needed.
+
+    _PROXY_DEFS: list[dict[str, str]] = [
+        # base_link: box approximation
+        {
+            "body": "base_link",
+            "type": "box",
+            "size": "0.10 0.05 0.03",
+            "pos": "0 0.03 0.025",
+        },
+        # link1 left/right: short capsule along link (~67mm span)
+        {
+            "body": "link1_left",
+            "type": "capsule",
+            "size": "0.008",
+            "fromto": "0 0 0 -0.067 0.015 -0.026",
+        },
+        {
+            "body": "link1_right",
+            "type": "capsule",
+            "size": "0.008",
+            "fromto": "0 0 0 -0.067 -0.015 -0.026",
+        },
+        # link2 left/right: longer capsule (~100mm span to wheel joint)
+        {
+            "body": "link2_left",
+            "type": "capsule",
+            "size": "0.008",
+            "fromto": "0 0 0 0.076 0 -0.064",
+        },
+        {
+            "body": "link2_right",
+            "type": "capsule",
+            "size": "0.008",
+            "fromto": "0 0 0 0.076 0 -0.064",
+        },
+        # link3 left/right: short passive capsule (~40mm)
+        {
+            "body": "link3_left",
+            "type": "capsule",
+            "size": "0.006",
+            "fromto": "0 0 0 -0.04 0 -0.02",
+        },
+        {
+            "body": "link3_right",
+            "type": "capsule",
+            "size": "0.006",
+            "fromto": "0 0 0 -0.04 0 0.02",
+        },
+        # wheels: sphere proxy (same as before)
+        {
+            "body": "wheel_left",
+            "type": "sphere",
+            "size": str(WHEEL_RADIUS),
+            "friction": "1.0 0.02 0.001",
+        },
+        {
+            "body": "wheel_right",
+            "type": "sphere",
+            "size": str(WHEEL_RADIUS),
+            "friction": "1.0 0.02 0.001",
+        },
+    ]
+
+    for defn in _PROXY_DEFS:
+        body_name = defn["body"]
         body = root.find(f".//body[@name='{body_name}']")
         if body is None:
-            raise ValueError(f"MuJoCo XML is missing wheel body: {body_name}")
+            continue
         proxy_name = f"{body_name}_collision_proxy"
         if body.find(f"geom[@name='{proxy_name}']") is not None:
             continue
-        inertial = body.find("inertial")
-        inertial_pos = inertial.get("pos") if inertial is not None else None
-        proxy_pos = inertial_pos if inertial_pos is not None else "0 0 0"
-        ET.SubElement(
-            body,
-            "geom",
-            {
-                "name": proxy_name,
-                "type": "sphere",
-                "size": str(WHEEL_RADIUS),
-                "pos": proxy_pos,
-                "group": "3",
-                "contype": "0",
-                "conaffinity": "1",
-                "friction": "1.0 0.02 0.001",
-            },
-        )
+
+        attrs: dict[str, str] = {
+            "name": proxy_name,
+            "type": defn["type"],
+            "size": defn["size"],
+            "group": "3",
+            "contype": "0",
+            "conaffinity": "1",
+        }
+        if "pos" in defn:
+            attrs["pos"] = defn["pos"]
+        if "fromto" in defn:
+            attrs["fromto"] = defn["fromto"]
+        if "friction" in defn:
+            attrs["friction"] = defn["friction"]
+
+        # For wheel proxies, place at inertial pos if no explicit pos given
+        if "pos" not in defn and "fromto" not in defn:
+            inertial = body.find("inertial")
+            if inertial is not None and inertial.get("pos"):
+                attrs["pos"] = inertial.get("pos")
+            else:
+                attrs["pos"] = "0 0 0"
+
+        ET.SubElement(body, "geom", attrs)
 
 
 def _replace_actuators(root: ET.Element) -> None:
@@ -311,3 +425,30 @@ def _add_connection_markers(root: ET.Element) -> None:
                         "rgba": "1 0 0 1",
                     },
                 )
+
+
+# Constraint-consistent symmetric standing pose. Both legs in the "low elbow"
+# branch of the 5-bar mechanism (link1 passive ≈ 0.98, base passive ≈ 0.72).
+# Pre-computed via equality-constraint settling with gravity disabled and
+# symmetric joint initialization. Base z lifts the wheel sphere proxies onto
+# the floor (z=0). Wheels and command sliders at 0.
+# CoM is ~2 cm ahead of wheels at this pose (manageable by LQR pitch_trim).
+# Indices match the order in sim/state.py:model_addresses().
+_STANDING_KEYFRAME_QPOS = (
+    "0 0 0.175 "                          # base x y z
+    "1 0 0 0 "                            # base quat (identity)
+    "0.752 0.980 0 "                      # right: motor, link1 passive, wheel
+    "0.752 0.980 0 "                      # left: motor, link1 passive, wheel
+    "0.720 0.720 "                        # base passive joints (link3 right/left)
+    "0 0"                                 # cmd_linear_x, cmd_angular_z
+)
+
+
+def _ensure_standing_keyframe(root: ET.Element) -> None:
+    """Add a standing keyframe satisfying the closed-loop equality constraints."""
+    keyframe = root.find("keyframe")
+    if keyframe is None:
+        keyframe = ET.SubElement(root, "keyframe")
+    if keyframe.find("key[@name='stand']") is not None:
+        return
+    ET.SubElement(keyframe, "key", {"name": "stand", "qpos": _STANDING_KEYFRAME_QPOS})

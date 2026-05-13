@@ -88,15 +88,14 @@ def main():
     ET.SubElement(visual, "rgba", {"haze": ".15 .25 .35 1"})
     ET.SubElement(visual, "global", {"azimuth": "120", "elevation": "-20"})
 
-    # Both main motor axes (base_link_rot-1 and rot-2) have identical orientations (Y roughly -1.0).
-    # Therefore, to swing both legs forward symmetrically, they must both receive the same sign of torque.
-    # We use gear=1.0 for both. The previous gear=-1.0 caused the right leg to swing backwards.
+    # Position actuators for direct angle control.
+    # With gravity off, slider value = target angle (no external forces).
     actuator = ET.SubElement(root, "actuator")
     for jname in LEG_MOTOR_JOINTS:
         ET.SubElement(actuator, "position", {
             "name": f"act_{jname}",
             "joint": jname,
-            "kp": "5",
+            "kp": "50",
             "ctrllimited": "true",
             "ctrlrange": "-1.5 1.5",
             "gear": "1.0",
@@ -136,11 +135,13 @@ def main():
     import time
     with mujoco.viewer.launch_passive(model, data) as viewer:
         print("=" * 60)
-        print("Base is FIXED. Drag sliders in Control panel to move legs.")
-        print("  act_base_link_旋转-2  ->  left leg")
-        print("  act_base_link_旋转-1  ->  right leg")
+        print("Base is FIXED. Gravity is OFF.")
+        print("Drag Control sliders to set joint angles directly.")
+        print(f"  act_{LEG_MOTOR_JOINTS[0]}  ->  left leg")
+        print(f"  act_{LEG_MOTOR_JOINTS[1]}  ->  right leg")
+        print("Slider value = target angle (radians).")
         print("=" * 60)
-        
+
         while viewer.is_running():
             mujoco.mj_step(model, data)
             viewer.sync()

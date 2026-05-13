@@ -12,8 +12,8 @@ def balance_tangent_state(model: object, data: object, state: SimState) -> np.nd
     状态向量: [pitch(rad), pitch_rate(rad/s), avg_wheel_pos(m), avg_wheel_vel(m/s)]
 
     pitch 和 pitch_rate 与 sim.state.extract_sim_state 保持一致:
-    - pitch 从 MuJoCo 四元数 [w, x, y, z] 提取局部 Y 轴倾角
-    - pitch_rate = wy = base_angular_velocity[1]
+    - pitch 从 MuJoCo 四元数 [w, x, y, z] 提取本体 X 轴的倾倒角 (与轮轴平行)
+    - pitch_rate = wx = base_angular_velocity[0]
 
     轮子位置/速度使用 WHEEL_FORWARD_SIGNS 统一方向后取平均。
     """

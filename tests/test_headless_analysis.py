@@ -1,92 +1,132 @@
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from __future__ import annotations
 
-import mujoco
-import math
-import numpy as np
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
+import mujoco
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sim.model_xml import _configure_geom_collisions, _ensure_equality_constraints, _urdf_to_mjcf
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
-from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _add_connection_markers, _configure_geom_collisions
 
-urdf_path = Path("sim/robot/robot.urdf").resolve()
-tmp_dir = Path(tempfile.mkdtemp())
-converted_xml = _urdf_to_mjcf(urdf_path, tmp_dir)
-prepared_xml = prepare_mujoco_xml(converted_xml)
-tree = ET.parse(prepared_xml)
-root = tree.getroot()
 
 LEG_MOTOR_JOINTS = ("base_link_旋转-2", "base_link_旋转-1")
-actuator = ET.SubElement(root, "actuator")
-for jname in LEG_MOTOR_JOINTS:
-    ET.SubElement(actuator, "position", {
-        "name": f"act_{jname}",
-        "joint": jname,
-        "kp": "5",
-        "ctrllimited": "true",
-        "ctrlrange": "-1.5 1.5",
-        "gear": "-1.0" if "旋转-1" in jname else "1.0",
-    })
+LEG_JOINTS_LEFT = ("base_link_旋转-2", "base_link_旋转-4", "link1_left_旋转-6")
+LEG_JOINTS_RIGHT = ("base_link_旋转-1", "base_link_旋转-3", "link1_right_旋转-5")
+JOINT_PAIRS = (
+    ("base_link_旋转-2", "base_link_旋转-1"),
+    ("base_link_旋转-4", "base_link_旋转-3"),
+    ("link1_left_旋转-6", "link1_right_旋转-5"),
+    ("link2_left_旋转-13", "link2_right_旋转-12"),
+)
 
-option = root.find("option")
-if option is None:
-    option = ET.Element("option", {"gravity": "0 0 0"})
-    root.insert(0, option)
-else:
-    option.set("gravity", "0 0 0")
 
-_configure_geom_collisions(root)
-_ensure_equality_constraints(root)
+def _build_position_model(tmp_path: Path) -> tuple[mujoco.MjModel, mujoco.MjData]:
+    converted_xml = _urdf_to_mjcf(Path("sim/robot/robot.urdf").resolve(), tmp_path)
+    prepared_xml = prepare_mujoco_xml(converted_xml)
+    tree = ET.parse(prepared_xml)
+    root = tree.getroot()
 
-out_xml = tmp_dir / "check_model.xml"
-tree.write(out_xml, encoding="utf-8", xml_declaration=False)
+    actuator = ET.SubElement(root, "actuator")
+    for joint_name in LEG_MOTOR_JOINTS:
+        ET.SubElement(
+            actuator,
+            "position",
+            {
+                "name": f"act_{joint_name}",
+                "joint": joint_name,
+                "kp": "5",
+                "ctrllimited": "true",
+                "ctrlrange": "-1.5 1.5",
+                "gear": "1.0",
+            },
+        )
 
-model = mujoco.MjModel.from_xml_path(str(out_xml))
-data = mujoco.MjData(model)
+    option = root.find("option")
+    if option is None:
+        option = ET.Element("option", {"gravity": "0 0 0"})
+        root.insert(0, option)
+    else:
+        option.set("gravity", "0 0 0")
 
-mujoco.mj_forward(model, data)
+    _configure_geom_collisions(root)
+    _ensure_equality_constraints(root)
 
-joints_left = ["base_link_旋转-2", "base_link_旋转-4", "link1_left_旋转-6", "link2_left_旋转-13"]
-joints_right = ["base_link_旋转-1", "base_link_旋转-3", "link1_right_旋转-5", "link2_right_旋转-12"]
+    out_xml = tmp_path / "check_model.xml"
+    tree.write(out_xml, encoding="utf-8", xml_declaration=False)
+    model = mujoco.MjModel.from_xml_path(str(out_xml))
+    data = mujoco.MjData(model)
+    for joint_name in LEG_MOTOR_JOINTS:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        data.qpos[model.jnt_qposadr[joint_id]] = 0.5
+    mujoco.mj_forward(model, data)
+    return model, data
 
-# Get ids
-j_ids_l = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, j) for j in joints_left]
-j_ids_r = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, j) for j in joints_right]
 
-qpos_adr_l = [model.jnt_qposadr[jid] for jid in j_ids_l]
-qpos_adr_r = [model.jnt_qposadr[jid] for jid in j_ids_r]
+def _joint_qpos_addresses(model: mujoco.MjModel, joint_names: tuple[str, ...]) -> list[int]:
+    joint_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name) for joint_name in joint_names]
+    return [int(model.jnt_qposadr[joint_id]) for joint_id in joint_ids]
 
-history_l = []
-history_r = []
 
-timestep = model.opt.timestep
-steps = int(6.28 / timestep)
+def _run_synchronized_position_rollout(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    ctrl_value: float = 1.0,
+    duration: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    left_qpos = _joint_qpos_addresses(model, LEG_JOINTS_LEFT)
+    right_qpos = _joint_qpos_addresses(model, LEG_JOINTS_RIGHT)
+    left_history = []
+    right_history = []
 
-for step in range(steps):
-    t = step * timestep
-    ctrl_val = math.sin(t)
-    for act_id in range(model.nu):
-        data.ctrl[act_id] = ctrl_val
-        
-    mujoco.mj_step(model, data)
-    
-    history_l.append([data.qpos[adr] for adr in qpos_adr_l])
-    history_r.append([data.qpos[adr] for adr in qpos_adr_r])
+    for _step in range(int(duration / model.opt.timestep)):
+        data.ctrl[:] = ctrl_value
+        mujoco.mj_step(model, data)
+        left_history.append([data.qpos[address] for address in left_qpos])
+        right_history.append([data.qpos[address] for address in right_qpos])
 
-hl = np.array(history_l)
-hr = np.array(history_r)
+    return np.array(left_history), np.array(right_history)
 
-print("Max values Left: ", np.max(hl, axis=0))
-print("Min values Left: ", np.min(hl, axis=0))
-print("Max values Right:", np.max(hr, axis=0))
-print("Min values Right:", np.min(hr, axis=0))
 
-range_l = np.max(hl, axis=0) - np.min(hl, axis=0)
-range_r = np.max(hr, axis=0) - np.min(hr, axis=0)
+def test_synchronized_leg_position_actuators_do_not_need_right_gear_compensation(tmp_path: Path) -> None:
+    model, data = _build_position_model(tmp_path)
+    left_history, right_history = _run_synchronized_position_rollout(model, data, ctrl_value=1.0)
 
-print("\nRange Left: ", range_l)
-print("Range Right:", range_r)
+    assert np.all(data.ctrl == 1.0)
+    assert np.max(np.abs(left_history[:, 0] - right_history[:, 0])) < 0.02
 
-print("\nLeft vs Right Discrepancy %:", np.abs(range_l - range_r) / range_l * 100)
+
+def test_leg_joint_world_axes_match_common_physical_semantics(tmp_path: Path) -> None:
+    model, data = _build_position_model(tmp_path)
+
+    for left_joint, right_joint in JOINT_PAIRS:
+        left_axis = _joint_world_axis(model, data, left_joint)
+        right_axis = _joint_world_axis(model, data, right_joint)
+        assert np.allclose(left_axis, right_axis, atol=1e-6)
+
+
+def test_mirrored_leg_body_frames_remain_right_handed(tmp_path: Path) -> None:
+    model, data = _build_position_model(tmp_path)
+
+    for body_name in ("link1_right", "link2_right", "link3_right", "wheel_right"):
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        body_rot = data.xmat[body_id].reshape(3, 3)
+        assert np.isclose(np.linalg.det(body_rot), 1.0, atol=1e-9)
+
+
+def _joint_world_axis(model: mujoco.MjModel, data: mujoco.MjData, joint_name: str) -> np.ndarray:
+    joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+    body_id = model.jnt_bodyid[joint_id]
+    body_rot = data.xmat[body_id].reshape(3, 3)
+    return body_rot @ model.jnt_axis[joint_id]
+
+
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        model_, data_ = _build_position_model(Path(tmp_dir))
+        left, right = _run_synchronized_position_rollout(model_, data_)
+        print("Max abs trajectory error:", np.max(np.abs(left - right), axis=0))

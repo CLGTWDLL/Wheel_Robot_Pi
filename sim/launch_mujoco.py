@@ -110,6 +110,10 @@ def build_controlled_model(xml_path: Path, cache_dir: Path | None = None) -> tup
     prepared_xml = prepare_controlled_mujoco_xml(xml_path, cache_dir=cache_dir)
     model = mujoco.MjModel.from_xml_path(str(prepared_xml))
     data = mujoco.MjData(model)
+
+    stand_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "stand")
+    if stand_id >= 0:
+        mujoco.mj_resetDataKeyframe(model, data, stand_id)
     mujoco.mj_forward(model, data)
     return model, data
 

@@ -14,12 +14,13 @@ class ModelSemantics:
 
 
 # 轮子前进方向符号: 虚拟正前进力矩映射到物理执行器的符号。
-# 当前朝向下, 两轮同时 +1.0 力矩会产生 +X 位移。
+# 当前 URDF: 轮轴方向 = 世界 +X。正向轮速 ω>0 (绕 +X) 使轮子滚向世界 -Y。
+# 约定 "前进" = 世界 +Y, 因此两轮的 forward sign 均为 -1。
 WHEEL_RADIUS = 0.036
 
 WHEEL_FORWARD_SIGNS: dict[str, float] = {
-    "link2_left_旋转-13": 1.0,
-    "link2_right_旋转-12": 1.0,
+    "link2_left_旋转-13": -1.0,
+    "link2_right_旋转-12": -1.0,
 }
 
 
