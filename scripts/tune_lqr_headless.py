@@ -11,9 +11,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--q-pitch", type=float, default=1000.0)
     parser.add_argument("--q-pitch-rate", type=float, default=100.0)
+    parser.add_argument("--q-roll", type=float, default=1000.0)
+    parser.add_argument("--q-roll-rate", type=float, default=100.0)
     parser.add_argument("--q-wheel-pos", type=float, default=10.0)
     parser.add_argument("--q-wheel-vel", type=float, default=100.0)
-    parser.add_argument("--r-diag", type=float, default=2.0)
+    parser.add_argument("--r-forward", type=float, default=2.0)
+    parser.add_argument("--r-roll", type=float, default=2.0)
     parser.add_argument("--linear-x", type=float, default=0.0)
     parser.add_argument("--angular-z", type=float, default=0.0)
     parser.add_argument("--vel-ki", type=float, default=0.0)
@@ -31,8 +34,15 @@ def main():
     params.pitch_trim = args.pitch_trim
 
 
-    params.q_diag = np.array([args.q_pitch, args.q_pitch_rate, args.q_wheel_pos, args.q_wheel_vel])
-    params.r_diag = np.array([args.r_diag, args.r_diag])
+    params.q_diag = np.array([
+        args.q_pitch,
+        args.q_pitch_rate,
+        args.q_roll,
+        args.q_roll_rate,
+        args.q_wheel_pos,
+        args.q_wheel_vel,
+    ])
+    params.r_diag = np.array([args.r_forward, args.r_roll])
     
     params.target_velocity = args.linear_x
     params.target_yaw_rate = args.angular_z

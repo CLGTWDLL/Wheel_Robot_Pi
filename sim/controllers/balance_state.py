@@ -13,7 +13,7 @@ def balance_tangent_state(model: object, data: object, state: SimState) -> np.nd
 
     pitch 和 pitch_rate 与 sim.state.extract_sim_state 保持一致:
     - pitch 从 MuJoCo 四元数 [w, x, y, z] 提取本体 X 轴的倾倒角 (与轮轴平行)
-    - pitch_rate = wx = base_angular_velocity[0]
+    - pitch_rate = -base_angular_velocity[0]
 
     轮子位置/速度使用 WHEEL_FORWARD_SIGNS 统一方向后取平均。
     """
@@ -40,6 +40,28 @@ def balance_tangent_state(model: object, data: object, state: SimState) -> np.nd
     )
     if tangent.shape != (4,) or not np.all(np.isfinite(tangent)):
         raise ValueError("balance tangent state must be shape (4,) and finite")
+    return tangent
+
+
+def balance_tangent_state_6d(model: object, data: object, state: SimState) -> np.ndarray:
+    """提取 LQR 平衡控制用的 6 维切线状态。
+
+    状态向量: [pitch, pitch_rate, roll, roll_rate, avg_wheel_pos, avg_wheel_vel]
+    """
+    four_d = balance_tangent_state(model, data, state)
+    tangent = np.array(
+        [
+            four_d[0],
+            four_d[1],
+            state.roll,
+            state.roll_rate,
+            four_d[2],
+            four_d[3],
+        ],
+        dtype=float,
+    )
+    if tangent.shape != (6,) or not np.all(np.isfinite(tangent)):
+        raise ValueError("6D balance tangent state must be shape (6,) and finite")
     return tangent
 
 

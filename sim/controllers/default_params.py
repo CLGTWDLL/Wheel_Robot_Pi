@@ -19,35 +19,38 @@ from sim.controllers.vmc import VmcParams
 
 STAND_PARAMS = CombinedParams(
     vmc=VmcParams(
-        nominal_height=0.145,
-        kp_height=200.0,
-        kd_height=20.0,
+        nominal_height=0.142,  # mid of LUT range [0.134, 0.149]
+        kp_motor=50.0,
+        kd_motor=4.0,
         crouch_offset=-0.02,
         extend_offset=0.02,
         landing_damping=1.0,
+        gravity_compensation_scale=1.0,
+        max_height_rate=0.05,
     ),
-    q_diag=np.array([5000.0, 200.0, 50.0, 100.0]),
-    r_diag=np.array([1.0, 1.0]),
+    q_diag=np.array([5000.0, 200.0, 5000.0, 200.0, 50.0, 500.0]),
+    r_diag=np.array([1.0, 2.0]),
     velocity_kp=0.5,
-    velocity_ki=0.0,
-    pitch_trim=-0.07,
+    velocity_ki=0.3,
+    pitch_trim=0.0,  # used only when pitch_trim_from_lut=False
     pitch_lean_gain=0.15,
     yaw_damping=0.5,
     yaw_ki=0.0,
+    fixed_height=False,
 )
 
 # 300 轮 Optuna 优化 (stand_then_drive 30s, 纯 PD VMC + LQR, score=-200.96)
 STAND_THEN_DRIVE_PARAMS = CombinedParams(
     vmc=VmcParams(
-        nominal_height=0.24,
-        kp_height=20.0,
-        kd_height=2.0,
+        nominal_height=0.142,
+        kp_motor=50.0,
+        kd_motor=4.0,
         crouch_offset=0.02,
         extend_offset=0.03,
         landing_damping=0.628,
     ),
-    q_diag=np.array([1000.0, 100.0, 10.0, 1.0]),
-    r_diag=np.array([1.0, 1.0]),
+    q_diag=np.array([1000.0, 100.0, 1000.0, 100.0, 10.0, 1.0]),
+    r_diag=np.array([1.0, 2.0]),
     pitch_trim=0.0,
     pitch_lean_gain=0.05,
     velocity_kp=0.5,
@@ -67,11 +70,13 @@ def params_to_dict(params: CombinedParams) -> dict[str, Any]:
     return {
         "vmc": {
             "nominal_height": params.vmc.nominal_height,
-            "kp_height": params.vmc.kp_height,
-            "kd_height": params.vmc.kd_height,
+            "kp_motor": params.vmc.kp_motor,
+            "kd_motor": params.vmc.kd_motor,
             "crouch_offset": params.vmc.crouch_offset,
             "extend_offset": params.vmc.extend_offset,
             "landing_damping": params.vmc.landing_damping,
+            "gravity_compensation_scale": params.vmc.gravity_compensation_scale,
+            "max_height_rate": params.vmc.max_height_rate,
         },
         "q_diag": params.q_diag.tolist(),
         "r_diag": params.r_diag.tolist(),
@@ -79,6 +84,8 @@ def params_to_dict(params: CombinedParams) -> dict[str, Any]:
         "pitch_lean_gain": params.pitch_lean_gain,
         "velocity_kp": params.velocity_kp,
         "velocity_ki": params.velocity_ki,
+        "pitch_trim": params.pitch_trim,
+        "pitch_trim_from_lut": params.pitch_trim_from_lut,
         "yaw_damping": params.yaw_damping,
     }
 
@@ -89,16 +96,20 @@ def params_from_dict(d: dict[str, Any]) -> CombinedParams:
     return CombinedParams(
         vmc=VmcParams(
             nominal_height=vmc_data["nominal_height"],
-            kp_height=vmc_data["kp_height"],
-            kd_height=vmc_data["kd_height"],
+            kp_motor=vmc_data["kp_motor"],
+            kd_motor=vmc_data["kd_motor"],
             crouch_offset=vmc_data.get("crouch_offset", -0.03),
             extend_offset=vmc_data.get("extend_offset", 0.05),
             landing_damping=vmc_data.get("landing_damping", 1.0),
+            gravity_compensation_scale=vmc_data.get("gravity_compensation_scale", 1.0),
+            max_height_rate=vmc_data.get("max_height_rate", 0.1),
         ),
         q_diag=np.array(d["q_diag"]),
         r_diag=np.array(d["r_diag"]),
         target_velocity=d.get("target_velocity", 0.0),
         pitch_lean_gain=d.get("pitch_lean_gain", 0.02),
+        pitch_trim=d.get("pitch_trim", 0.0),
+        pitch_trim_from_lut=d.get("pitch_trim_from_lut", True),
         velocity_kp=d.get("velocity_kp", 0.5),
         velocity_ki=d.get("velocity_ki", 0.1),
         yaw_damping=d.get("yaw_damping", 0.5),

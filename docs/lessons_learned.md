@@ -368,6 +368,24 @@
 
 之前设定的 `nominal_height = 0.47m` 和 `0.5041m` 完全不可达，导致 VMC 永远饱和。
 
+### 2026-05-13 (B): VMC 高度 metric 改为世界 z 距离
+
+**变更**: `_leg_height` 由“base 到 wheel 在 base 本体 z 方向的投影”改为“base `xipos.z` 到 wheel `xipos.z` 的世界 z 距离”。解析 Jacobian 同步改为 `mj_jac` 的世界 z 行差值。
+
+**验证**: stand keyframe 下 wheel body `xipos.z` 与 wheel collision proxy `geom_xpos.z` 一致，误差约 `1e-8m`，因此当前实现使用 wheel body `xipos`。
+
+**调参结果**: `cmd_height` 连续扫描可站范围收窄到 `0.04..0.16`；当前 3.5Nm 腿电机上限下，`pos_z` 实测跟随约 `1cm` 到 `2cm`，未达到 `5cm`。高端会进入腿部力矩饱和，drive/jump 参数未在本轮调整。
+
+### 2026-05-13 (P3): LQR 扩展为 6D 并纳入 base roll
+
+**变更**: LQR 状态从 `[pitch, pitch_rate, wheel_pos, wheel_vel]` 扩为 `[pitch, pitch_rate, roll, roll_rate, wheel_pos, wheel_vel]`。LQR 输出改为两个虚拟量: `forward_wheel` 和 `roll_diff_leg`。Yaw PI 仍只作用于轮子差速，VMC 仍只作用于腿部同向高度控制。
+
+**关键实测**: 当前模型左右轮中心主要沿 base X 分离，差值约 `0.249m`；沿 base Y 分离接近 0。因此 roll 子系统的 `track_width` 必须取左右轮中心在 base X 方向的距离。若按 base Y 投影，roll 杠杆臂会接近 0，LQR roll 增益会被放大到不可用。
+
+**符号**: 短时仿真验证显示“左腿 +1Nm、右腿 -1Nm”会让 `roll` 朝负方向变化。因此虚拟 `roll_diff_leg > 0` 映射为左腿负、右腿正，并用测试固定。
+
+**结果**: `verify_cmd_height_tracking.py` 中 `max_abs_roll` 约 `0.0002rad`，roll 已进入 LQR 控制。高度跟随仍受 3.5Nm 腿电机限幅影响，`pos_z_span` 约 `0.008m`，未达到 5cm。
+
 ## 2026-05-05: 轮腿机器人对称性与控制问题排查
 1. **坐标系镜像的轴向量（Axial Vector）处理**：
    - 现象：在进行结构左右镜像时，直接使用 `[-ax, ay, az]` 反转关节旋转轴导致运动学严重扭曲，导致模型在 MuJoCo 中启动时解体（散架）。
@@ -376,4 +394,3 @@
    - 现象：机器人在启动时出现极高的持续偏航角速度（Yaw Drift），甚至原地转圈。
    - 原因：控制逻辑中 `yaw_correction` 应用到轮子力矩时，符号与物理旋转方向不匹配，导致正误差产生负反馈修正，但在经过 `_wheel_control_selection` 映射后，实际上加剧了偏航旋转，形成了正反馈。
    - 解决：反转 `yaw_correction` 的符号。
-

@@ -6,13 +6,13 @@ from typing import Any
 import numpy as np
 import mujoco
 
-from sim.controllers.balance_lqr import _wheel_control_selection
-from sim.controllers.balance_state import balance_tangent_state
+from sim.controllers.balance_lqr import LEG_ROLL_DIFF_SIGNS
+from sim.controllers.balance_state import balance_tangent_state_6d
 from sim.controllers.lqr import LqrController
 from sim.controllers.phase import JumpPhaseMachine, JumpPhase
-from sim.controllers.vmc import VmcController, VmcParams
+from sim.controllers.vmc import LEG_CLOSED_LOOP, VmcController, VmcParams
 from sim.model_semantics import MODEL_SEMANTICS, WHEEL_FORWARD_SIGNS
-from sim.state import SimState, model_addresses
+from sim.state import SimState, body_id, model_addresses
 
 
 @dataclass
@@ -21,10 +21,11 @@ class CombinedParams:
 
     Attributes:
         vmc: VMC 高度控制参数。
-        q_diag: LQR 状态权重对角线 [pitch, pitch_rate, wheel_pos, wheel_vel]。
-        r_diag: LQR 控制权重对角线 [left_wheel, right_wheel]。
+        q_diag: LQR 状态权重对角线 [pitch, pitch_rate, roll, roll_rate, wheel_pos, wheel_vel]。
+        r_diag: LQR 虚拟控制权重对角线 [forward_wheel, roll_diff_leg]。
         target_velocity: 目标前进速度 (m/s)。可运行时修改。
-        pitch_trim: 稳态平衡的静态俯仰角偏移（平衡 CoM 的结构偏差）。
+        pitch_trim: 手动稳态 pitch 偏移，仅在 pitch_trim_from_lut=False 时使用。
+        pitch_trim_from_lut: 是否从腿高 LUT 读取当前高度的平衡 pitch。
         pitch_lean_gain: 速度误差到目标 pitch 偏移的增益。
         velocity_kp: 速度 PI 前馈比例增益。
         velocity_ki: 速度 PI 前馈积分增益。
@@ -36,6 +37,7 @@ class CombinedParams:
     r_diag: np.ndarray
     target_velocity: float = 0.0
     pitch_trim: float = 0.0
+    pitch_trim_from_lut: bool = True
     pitch_lean_gain: float = 0.02
     velocity_kp: float = 0.5
     velocity_ki: float = 0.1
@@ -60,9 +62,10 @@ class CombinedController:
         self._velocity_integral: float = 0.0
         self._yaw_integral: float = 0.0
         self._prev_target_velocity: float = params.target_velocity
-        self._lqr_gain_cache: dict[int, np.ndarray] = {}
-        self._active_lqr_height_bin: int | None = None
+        self._lqr_gain_cache: dict[tuple[int, int], np.ndarray] = {}
+        self._active_lqr_gain_key: tuple[int, int] | None = None
         self._height_support_target: float | None = params.height_support_target
+        self._height_wheel_velocity_ff: float = 0.0
 
     @property
     def lqr_controller(self) -> LqrController | None:
@@ -72,47 +75,52 @@ class CombinedController:
         bin_size = max(float(self.params.lqr_height_bin_size), 1e-6)
         return int(np.floor(float(state.base_position[2]) / bin_size))
 
+    def _lqr_gain_key(self, model: Any, data: Any, state: SimState) -> tuple[int, int]:
+        del model, data
+        roll_bin = int(np.floor(float(state.roll) / 0.02))
+        return (self._height_bin(state), roll_bin)
+
     def _compute_lqr_gain(self, model: Any, data: Any) -> np.ndarray:
         from sim.controllers.balance_lqr import compute_balance_lqr_gain
 
         reduced_gain = compute_balance_lqr_gain(model, data, self.params.q_diag, self.params.r_diag)
-        return _wheel_control_selection(model) @ reduced_gain
+        return reduced_gain
 
     def _initialize_lqr(self, model: Any, data: Any, state: SimState) -> None:
         if not np.isfinite(self.params.target_velocity):
             raise ValueError("target_velocity must be finite")
 
-        height_bin = self._height_bin(state)
-        gain = self._lqr_gain_cache.get(height_bin)
+        gain_key = self._lqr_gain_key(model, data, state)
+        gain = self._lqr_gain_cache.get(gain_key)
         if gain is None:
             gain = self._compute_lqr_gain(model, data)
-            self._lqr_gain_cache[height_bin] = gain
-        self._active_lqr_height_bin = height_bin
+            self._lqr_gain_cache[gain_key] = gain
+        self._active_lqr_gain_key = gain_key
 
-        feedforward = np.zeros(model.nu)
-        target = balance_tangent_state(model, data, state).copy()
-        target[0] = self.params.pitch_trim
+        feedforward = np.zeros(2)
+        target = balance_tangent_state_6d(model, data, state).copy()
+        target[0] = self._pitch_trim_for_state(model, data)
         target[1] = 0.0
-        target[3] = self.params.target_velocity
-        self._lqr_controller = LqrController(gain, target, feedforward, balance_tangent_state)
+        target[2] = 0.0
+        target[3] = 0.0
+        target[5] = self.params.target_velocity
+        self._lqr_controller = LqrController(gain, target, feedforward, balance_tangent_state_6d)
 
     def _ensure_lqr_height_bin(self, model: Any, data: Any, state: SimState) -> None:
         if self._lqr_controller is None:
             return
-        height_bin = self._height_bin(state)
-        if height_bin == self._active_lqr_height_bin:
+        gain_key = self._lqr_gain_key(model, data, state)
+        if gain_key == self._active_lqr_gain_key:
             return
-        gain = self._lqr_gain_cache.get(height_bin)
+        gain = self._lqr_gain_cache.get(gain_key)
         if gain is None:
             gain = self._compute_lqr_gain(model, data)
-            self._lqr_gain_cache[height_bin] = gain
+            self._lqr_gain_cache[gain_key] = gain
         self._lqr_controller.gain = gain
-        self._active_lqr_height_bin = height_bin
+        self._active_lqr_gain_key = gain_key
 
     def _apply_height_support(self, model: Any, data: Any, state: SimState) -> None:
-        base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
-        if base_id == -1:
-            return
+        base_id = body_id(model, "base_link")
         if not self.params.height_support_enabled:
             data.xfrc_applied[base_id, :] = 0.0
             return
@@ -132,14 +140,43 @@ class CombinedController:
         data.xfrc_applied[base_id, :] = 0.0
         data.xfrc_applied[base_id, 2] = support_force
 
-    def _update_lqr_target(self, state: SimState, dt: float) -> None:
+    def _average_leg_height_and_wheel_mid_z(self, model: Any, data: Any) -> tuple[float, float]:
+        wheel_ids = [
+            body_id(model, geometry.wheel_body)
+            for geometry in LEG_CLOSED_LOOP.values()
+        ]
+        base_id = body_id(model, "base_link")
+        wheel_mid_z = float(np.mean([data.xipos[wheel_id, 2] for wheel_id in wheel_ids]))
+        return float(data.xipos[base_id, 2] - wheel_mid_z), wheel_mid_z
+
+    def _pitch_trim_for_height(self, leg_height: float) -> float:
+        if self.params.pitch_trim_from_lut:
+            return self.params.vmc.lut.pitch_eq_from_height(leg_height)
+        return self.params.pitch_trim
+
+    def _pitch_trim_for_state(self, model: Any, data: Any) -> float:
+        leg_height, _wheel_mid_z = self._average_leg_height_and_wheel_mid_z(model, data)
+        return self._pitch_trim_for_height(leg_height)
+
+    def _height_wheel_velocity_feedforward(self, current_leg_height: float) -> float:
+        if self.params.fixed_height:
+            return 0.0
+        left_rate = self.vmc_controller.last_target_motor_rate.get("left", 0.0)
+        right_rate = self.vmc_controller.last_target_motor_rate.get("right", 0.0)
+        theta_rate_mean = 0.5 * (left_rate + right_rate)
+        dh_dt_cmd = self.params.vmc.lut.height_dtheta(current_leg_height) * theta_rate_mean
+        return self.params.vmc.lut.dy_wheel_dh(current_leg_height) * dh_dt_cmd
+
+    def _update_lqr_target(self, model: Any, data: Any, state: SimState, dt: float) -> None:
         """每步更新 LQR 目标: 速度跟踪 + pitch 前倾补偿。"""
         if self._lqr_controller is None:
             return
-        current_tangent = balance_tangent_state(None, None, state)
-        current_wheel_pos = float(current_tangent[2])
-        current_wheel_vel = float(current_tangent[3])
-        velocity_error = self.params.target_velocity - current_wheel_vel
+        current_tangent = balance_tangent_state_6d(None, None, state)
+        current_wheel_pos = float(current_tangent[4])
+        current_wheel_vel = float(current_tangent[5])
+        current_leg_height, _wheel_mid_z = self._average_leg_height_and_wheel_mid_z(model, data)
+        velocity_target = self.params.target_velocity + self._height_wheel_velocity_ff
+        velocity_error = velocity_target - current_wheel_vel
 
         # 积分只在没有饱和时累加，防止积分饱和 (anti-windup)
         max_lean = 0.2
@@ -152,28 +189,27 @@ class CombinedController:
             self._velocity_integral += velocity_error * dt
 
         pitch_lean = np.clip(pitch_lean, -max_lean, max_lean)
-        self._lqr_controller.target[0] = self.params.pitch_trim + pitch_lean
+        self._lqr_controller.target[0] = self._pitch_trim_for_height(current_leg_height) + pitch_lean
+        self._lqr_controller.target[1] = 0.0
+        self._lqr_controller.target[2] = 0.0
+        self._lqr_controller.target[3] = 0.0
 
         # 运动模式: 同步目标位置到当前位置，避免位置环"橡皮筋"。
         # 站立模式 (target_velocity≈0): 保持初始目标位置, 启用 LQR 位置闭环消除漂移。
-        if abs(self.params.target_velocity) > 1e-4:
-            self._lqr_controller.target[2] = current_wheel_pos
+        if abs(velocity_target) > 1e-4:
+            self._lqr_controller.target[4] = current_wheel_pos
+        if abs(self._height_wheel_velocity_ff) > 1e-6:
+            self._lqr_controller.target[4] += self._height_wheel_velocity_ff * dt
 
-        self._lqr_controller.target[3] = self.params.target_velocity
+        self._lqr_controller.target[5] = velocity_target
 
         self._prev_target_velocity = self.params.target_velocity
 
-    def _compute_forward_torque(self, lqr_control: np.ndarray, addresses: Any) -> float:
-        """计算 LQR 输出的前向力矩平均值。"""
-        wheel_indices = []
-        wheel_signs = []
-        for joint_name in MODEL_SEMANTICS.wheel_joints:
-            wheel_indices.append(addresses.actuators[joint_name])
-            wheel_signs.append(WHEEL_FORWARD_SIGNS[joint_name])
-
-        forward_torques = [wheel_signs[i] * lqr_control[wheel_indices[i]] for i in range(2)]
-        avg_forward = float(np.mean(forward_torques))
-        return avg_forward
+    def _compute_lqr_virtual_outputs(self, lqr_control: np.ndarray) -> tuple[float, float]:
+        """返回 LQR 虚拟输出: (forward_wheel, roll_diff_leg)。"""
+        if lqr_control.shape != (2,):
+            raise ValueError("6D LQR virtual control must have shape (2,)")
+        return float(lqr_control[0]), float(lqr_control[1])
 
     def _compute_yaw_correction(self, state: SimState, dt: float) -> float:
         """计算 yaw PI 修正量。"""
@@ -192,13 +228,31 @@ class CombinedController:
             wheel_control[actuator_index] = WHEEL_FORWARD_SIGNS[joint_name] * virtual_torque
         return wheel_control
 
-    def _assemble_and_clip_control(self, model: Any, avg_forward: float, yaw_correction: float, vmc_control: np.ndarray, addresses: Any) -> np.ndarray:
+    def _allocate_lqr_control(self, model: Any, forward_torque: float, roll_torque: float, addresses: Any) -> np.ndarray:
+        control = np.zeros(model.nu)
+        for joint_name in MODEL_SEMANTICS.wheel_joints:
+            actuator_index = addresses.actuators[joint_name]
+            control[actuator_index] = WHEEL_FORWARD_SIGNS[joint_name] * forward_torque
+        for joint_name, sign in LEG_ROLL_DIFF_SIGNS.items():
+            control[addresses.actuators[joint_name]] = sign * roll_torque
+        return control
+
+    def _assemble_and_clip_control(
+        self,
+        model: Any,
+        avg_forward: float,
+        yaw_correction: float,
+        roll_torque: float,
+        vmc_control: np.ndarray,
+        addresses: Any,
+    ) -> np.ndarray:
         """组装轮腿控制指令并限制在执行器范围内。"""
-        control = self._allocate_wheel_control(model, avg_forward, yaw_correction, addresses)
+        control = self._allocate_lqr_control(model, avg_forward, roll_torque, addresses)
+        control += self._allocate_wheel_control(model, 0.0, yaw_correction, addresses)
 
         for joint_name in MODEL_SEMANTICS.leg_motor_joints:
             actuator_index = addresses.actuators[joint_name]
-            control[actuator_index] = vmc_control[actuator_index]
+            control[actuator_index] += vmc_control[actuator_index]
 
         clipped = control.copy()
         for joint_name in MODEL_SEMANTICS.wheel_joints + MODEL_SEMANTICS.leg_motor_joints:
@@ -219,21 +273,27 @@ class CombinedController:
         self._apply_height_support(model, data, state)
         if not self.params.fixed_height:
             self._ensure_lqr_height_bin(model, data, state)
-        self._update_lqr_target(state, dt)
-
-        self._lqr_controller.feedforward = np.zeros(model.nu)
 
         addresses = model_addresses(model)
-        lqr_control = self._lqr_controller(model, data, state)
         vmc_control = self.vmc_controller(model, data, state)
 
         phase = self.vmc_controller.phase_machine.phase if self.vmc_controller.phase_machine is not None else JumpPhase.STAND
+        current_leg_height, _wheel_mid_z = self._average_leg_height_and_wheel_mid_z(model, data)
+        self._height_wheel_velocity_ff = self._height_wheel_velocity_feedforward(current_leg_height)
+        if phase in (JumpPhase.FLIGHT, JumpPhase.LAND, JumpPhase.FAIL):
+            self._height_wheel_velocity_ff = 0.0
+
+        self._update_lqr_target(model, data, state, dt)
+
+        self._lqr_controller.feedforward = np.zeros(2)
+        lqr_control = self._lqr_controller(model, data, state)
         
         if phase in (JumpPhase.FLIGHT, JumpPhase.LAND, JumpPhase.FAIL):
             avg_forward = 0.0
+            roll_torque = 0.0
             yaw_correction = 0.0
         else:
-            avg_forward = self._compute_forward_torque(lqr_control, addresses)
+            avg_forward, roll_torque = self._compute_lqr_virtual_outputs(lqr_control)
             yaw_correction = self._compute_yaw_correction(state, dt)
 
-        return self._assemble_and_clip_control(model, avg_forward, yaw_correction, vmc_control, addresses)
+        return self._assemble_and_clip_control(model, avg_forward, yaw_correction, roll_torque, vmc_control, addresses)

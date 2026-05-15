@@ -176,6 +176,11 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
    - 真实的物理仿真模型是在 `launch_mujoco.py` 运行时，通过 `sim/model_xml.py` 中的 `prepare_controlled_mujoco_xml` 动态生成的。
    - 该 Python 脚本会执行许多关键“魔改”：比如将所有 mesh 设为纯视觉（visual-only）、强行注入 `sphere` 碰撞体作为轮子（比 cylinder 更利于 LQR 平滑控制）、强行注入 `root` freejoint、以及注入命令滑块等。
    - **禁止**仅凭阅读原始的 `.xml` 文件就得出系统结构结论，更不要盲目在原始 XML 中添加复杂的碰撞网格。任何针对仿真物理环境的判断，必须以 `sim/model_xml.py` 处理后的动态模型为准。
+7. **代码注释只是参考，必须用脚本核实**：
+   - 仓库经历了多次模型重构（鸟腿 0.47m → 当前五连杆 0.18m 高度），URDF、keyframe、CoM、平衡 pitch、摆杆长度等几何量都已多次变更。
+   - 代码与文档中（包括 `model_xml.py`、`default_params.py`、`docs/lessons_learned.md`、本文件）出现的所有具体数值——CoM 偏移、平衡 pitch、摆杆长度、轮距、合理 `pitch_trim` 范围等——都可能是**前一版模型的遗留**，与当前模型不一致。
+   - **禁止**在调参或决策时直接引用注释中的数字。任何涉及几何量的判断，必须临时写脚本用 `mj_resetDataKeyframe` + `mj_forward` 重新计算（参考 CoM 偏移测量套路：`(masses[:,None]*data.xipos).sum(0)/total_mass` 减去 `0.5*(wheel_l.xipos + wheel_r.xipos)`）。
+   - 发现注释与实测不符时，**先订正注释**再继续工作，避免错误数字继续被下一个 agent 引用。
 
 ## 实机硬件 CAN 配置与调试规则
 
@@ -247,3 +252,53 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 - **测试文件**：所有的测试代码和文件必须统一写入 `tests/` 目录下。
 - **临时文件**：所有的临时文件必须写入 `tmp/` 目录下。并且，一旦使用完毕或不再需要，必须在当前会话结束前主动清理/删除这些临时文件，以保持工作区整洁。
+
+## MuJoCo 仿真性能与 mesh 抽稀经验
+
+### 症状
+`uv run mjpython sim/launch_mujoco.py` 在 macOS / Apple Silicon 上帧率低、卡顿，但物理本身不慢。
+
+### 判断瓶颈：先跑 headless profile
+不要直接猜，先用 `uv run python profile_sim.py` 验证物理速度。本项目实测 headless 跑 ~10x realtime —— 这说明 `mj_step`/控制器都不是瓶颈，**问题在渲染**，再去动其它东西都是错方向。
+
+### 为什么 macOS 上 visual mesh 面数会影响这么大
+不是 M 芯片不够强，是几层开销叠加：
+1. **macOS OpenGL 是兼容翻译层**：Apple 2018 弃用 OpenGL 封顶 4.1，M 芯片上走 OpenGL → Metal 翻译，per-draw-call CPU 开销远高于 Linux/Windows。
+2. **小三角形 GPU "quad 浪费"**：GPU 光栅化按 2×2 像素 quad 为单位，一个亚像素三角形仍跑完整 4 个 fragment shader（3 个被丢弃）。CAD 导出的高面 mesh 大量三角形在 viewer 视角下小于一像素，**外观看不出差别但 GPU 在大量做无效工作**。
+3. **主线程渲染 + viewer.lock() 抢锁**：mjpython 强制 viewer 主线程渲染，worker 线程跑物理，两边共享 `viewer.lock()`。`launch_mujoco.py` 的循环是无 sleep 紧凑 while，重 mesh 拖慢主线程会饥饿 worker → catch-up 累积 → 卡顿。
+
+### 检查 mesh 面数
+```python
+import mujoco; from sim.model_xml import prepare_controlled_mujoco_xml
+m = mujoco.MjModel.from_xml_path(str(prepare_controlled_mujoco_xml(Path('sim/robot/robot.urdf'))))
+for i in range(m.nmesh):
+    print(mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_MESH, i), m.mesh_vertnum[i], m.mesh_facenum[i])
+```
+经验阈值：单个 visual mesh 超过 30k 面就值得抽稀，超过 100k 几乎肯定要抽稀。本项目原始 `base_link.stl` 是 190k 面，是唯一的大头。
+
+### 抽稀工具选择（踩过的坑）
+- **不要用 `fast-simplification`（pyfqmr）做 CAD mesh 抽稀**：默认 aggressiveness 高时，圆孔/圆柱/倒角会被切平变多边形（quadric error 在曲面上分布太均匀，圆形特征被优先吃掉）；降低 `agg=3` 又过于保守只能减 40%。对于"既有平面又有曲面"的 CAD 模型不合适。
+- **首选 `pymeshlab`（MeshLab 的 QEC filter）**：开关够多，能在保圆角的同时大幅压平面区域。
+- **不要用 Blender CLI**：本项目尝试过的 quadric 路径里它最慢、质量也不如 pymeshlab。
+
+### 抽稀脚本与正确参数
+脚本：`scripts/decimate_base_link.py`，**始终从 `base_link.stl.orig` 重读再写到 `base_link.stl`**，方便反复迭代不累积失真。第一次跑前先 `cp base_link.stl base_link.stl.orig` 保存原始。
+
+PyMeshLab `meshing_decimation_quadric_edge_collapse` 的关键开关（缺一影响很大）：
+- `preserveboundary=True` + `boundaryweight=2.0`：双倍权重保护孔洞/外轮廓边界，圆孔不被切平。
+- `preservenormal=True`：保护法线方向，防止圆柱面凹凸翻折。
+- `planarquadric=True`：平面用平面误差度量，**优先在大平板上抽稀而不是在圆角上**。这是 fast-simplification 没有的能力。
+- `optimalplacement=True`：合并后新顶点放在最小误差位置（不只是端点之一）。
+- `qualitythr=1.0`：拒绝生成狭长三角形。
+- 注意 pymeshlab 2025.7 的 filter 名是 `meshing_decimation_quadric_edge_collapse`（不带 `_decimation` 后缀），老文档里的 `..._decimation` 名字会报"Filter does not exists"。
+
+本项目实测 190k → 30k 面（-84%，9.1 MB → 1.5 MB），圆孔/圆柱外观保住，viewer 流畅明显改善。
+
+### 其它已知开销（次要，必要时再动）
+- 方向光 `castshadow="true"` 会让 shadow map pass 把所有 mesh 再渲染一遍。一般保留即可，确认 mesh 已抽稀后还是卡再考虑关。
+- `launch_mujoco.py` 的 viewer 循环无 sleep 紧凑 while，可在循环末尾加 `time.sleep(max(0, next_frame - perf_counter()))` 节流到 60Hz 缓解锁竞争。
+
+### 不要做的事
+- 不要为了"提速"把 mesh 面数限制 (`prepare_mujoco_xml` 的 `face_limit`) 调低 —— 那个机制只是把单个 mesh 切成多块以绕过 MuJoCo 单 mesh 上限，**不减少总三角形数**，对渲染开销没帮助。
+- 不要去动碰撞 mesh —— 本项目 `sim/model_xml.py` 已经用 box/capsule/sphere proxy 替代 mesh 碰撞，渲染慢和碰撞无关。
+

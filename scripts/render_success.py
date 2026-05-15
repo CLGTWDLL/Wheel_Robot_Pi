@@ -14,7 +14,7 @@ d = mujoco.MjData(m)
 mujoco.mj_forward(m, d)
 
 params = STAND_PARAMS
-params.q_diag = np.array([500.0, 50.0, 10.0, 1.0])
+params.q_diag = np.array([500.0, 50.0, 500.0, 50.0, 10.0, 1.0])
 controller = CombinedController(params)
 controller._initialize_lqr(m, d, __import__('sim.state').state.extract_sim_state(m, d))
 

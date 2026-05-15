@@ -10,7 +10,7 @@ from sim.model_semantics import MODEL_SEMANTICS, WHEEL_RADIUS
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
 
 
-CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z")
+CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z", "cmd_height")
 
 
 def _urdf_to_mjcf(urdf_path: Path, output_dir: Path) -> Path:
@@ -142,6 +142,8 @@ def _ensure_world_environment(root: ET.Element) -> None:
         ET.SubElement(visual, "rgba", {"haze": ".15 .25 .35 1"})
     if visual.find("global") is None:
         ET.SubElement(visual, "global", {"azimuth": "120", "elevation": "-20"})
+    if visual.find("quality") is None:
+        ET.SubElement(visual, "quality", {"shadowsize": "1024"})
 
     # Use MuJoCo default gravity (0 0 -9.81). Only insert an <option> if absent.
     if root.find("option") is None:
@@ -183,6 +185,7 @@ def _ensure_command_slider_joints(root: ET.Element) -> None:
     )
     ET.SubElement(body, "joint", {"name": CMD_SLIDER_NAMES[0], "type": "hinge", "axis": "1 0 0", "damping": "0"})
     ET.SubElement(body, "joint", {"name": CMD_SLIDER_NAMES[1], "type": "hinge", "axis": "0 1 0", "damping": "0"})
+    ET.SubElement(body, "joint", {"name": CMD_SLIDER_NAMES[2], "type": "hinge", "axis": "0 0 1", "damping": "0"})
 
 
 def _configure_geom_collisions(root: ET.Element) -> None:
@@ -325,7 +328,7 @@ def _replace_actuators(root: ET.Element) -> None:
 
     actuator = ET.Element("actuator")
     for joint_name in MODEL_SEMANTICS.wheel_joints + MODEL_SEMANTICS.leg_motor_joints:
-        ctrlrange = "-1.0 1.0" if joint_name in MODEL_SEMANTICS.wheel_joints else "-3.5 3.5"
+        ctrlrange = "-1.0 1.0" if joint_name in MODEL_SEMANTICS.wheel_joints else "-5.0 5.0"
         ET.SubElement(
             actuator,
             "motor",
@@ -337,7 +340,10 @@ def _replace_actuators(root: ET.Element) -> None:
                 "gear": "1",
             },
         )
-    for name, ctrlrange in zip(CMD_SLIDER_NAMES, ("-1.0 1.0", "-3.0 3.0")):
+    # cmd_height range matches the LUT's reachable h interval (see
+    # sim/controllers/leg_height_lut.json). Slightly inset so the LUT inverse
+    # interpolation never has to clamp.
+    for name, ctrlrange in zip(CMD_SLIDER_NAMES, ("-1.0 1.0", "-3.0 3.0", "0.118 0.148")):
         ET.SubElement(
             actuator,
             "motor",
@@ -432,15 +438,17 @@ def _add_connection_markers(root: ET.Element) -> None:
 # Pre-computed via equality-constraint settling with gravity disabled and
 # symmetric joint initialization. Base z lifts the wheel sphere proxies onto
 # the floor (z=0). Wheels and command sliders at 0.
-# CoM is ~2 cm ahead of wheels at this pose (manageable by LQR pitch_trim).
 # Indices match the order in sim/state.py:model_addresses().
+# CoM offset: 当前模型实测 CoM 在 wheel 中心 +Y 方向约 18 mm，pendulum
+# 长度约 0.107 m，平衡 pitch 约 -0.17 rad。请用脚本实测后再使用，不要
+# 依赖此注释中的具体数字。
 _STANDING_KEYFRAME_QPOS = (
     "0 0 0.175 "                          # base x y z
     "1 0 0 0 "                            # base quat (identity)
     "0.752 0.980 0 "                      # right: motor, link1 passive, wheel
     "0.752 0.980 0 "                      # left: motor, link1 passive, wheel
     "0.720 0.720 "                        # base passive joints (link3 right/left)
-    "0 0"                                 # cmd_linear_x, cmd_angular_z
+    "0 0 0"                               # cmd_linear_x, cmd_angular_z, cmd_height
 )
 
 

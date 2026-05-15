@@ -19,14 +19,11 @@ from sim.controllers.combined import CombinedController
 from sim.controllers.default_params import STAND_PARAMS
 from sim.controllers.phase import JumpPhaseMachine, JumpPhaseParams
 from sim.controllers.vmc import VmcController
-from sim.model_xml import prepare_controlled_mujoco_xml
+from sim.model_xml import CMD_SLIDER_NAMES, prepare_controlled_mujoco_xml
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
 from sim.rollout import Controller, _clip_control, zero_controller
-from sim.state import extract_sim_state
+from sim.state import actuator_id, extract_sim_state
 from sim.logger import setup_system_logger, TelemetryLogger, cleanup_old_logs
-
-
-CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z")
 
 
 def ensure_dependencies() -> None:
@@ -114,8 +111,22 @@ def build_controlled_model(xml_path: Path, cache_dir: Path | None = None) -> tup
     stand_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "stand")
     if stand_id >= 0:
         mujoco.mj_resetDataKeyframe(model, data, stand_id)
+    _initialize_cmd_sliders(model, data)
     mujoco.mj_forward(model, data)
     return model, data
+
+
+def _initialize_cmd_sliders(model: Any, data: Any) -> None:
+    slider_defaults = {
+        "cmd_linear_x": 0.0,
+        "cmd_angular_z": 0.0,
+        "cmd_height": float(STAND_PARAMS.vmc.nominal_height),
+    }
+    for name, value in slider_defaults.items():
+        act_id = actuator_id(model, name)
+        if act_id >= 0:
+            low, high = model.actuator_ctrlrange[act_id]
+            data.ctrl[act_id] = float(np.clip(value, low, high))
 
 
 def create_controlled_controller(controller_name: str, scenario: str) -> Controller:
@@ -165,10 +176,9 @@ def step_controlled_model(
 
 def _write_physical_ctrl(model: Any, data: Any, control: np.ndarray) -> None:
     """写入真实执行器控制量，保留 command slider 的 ctrl 值。"""
-    import mujoco
     command_values: dict[int, float] = {}
     for name in CMD_SLIDER_NAMES:
-        act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+        act_id = actuator_id(model, name)
         if act_id >= 0:
             command_values[act_id] = float(data.ctrl[act_id])
     data.ctrl[:] = control
@@ -176,22 +186,22 @@ def _write_physical_ctrl(model: Any, data: Any, control: np.ndarray) -> None:
         data.ctrl[act_id] = value
 
 
-def _read_cmd_sliders(model: Any, data: Any) -> tuple[float, float]:
-    """读取 cmd_linear_x / cmd_angular_z 滑块的当前 ctrl 值。"""
-    import mujoco
-    result = [0.0, 0.0]
-    for i, name in enumerate(CMD_SLIDER_NAMES):
-        act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+def _read_cmd_sliders(model: Any, data: Any) -> dict[str, float]:
+    """读取 cmd_* 滑块的当前 ctrl 值。"""
+    result: dict[str, float] = {}
+    for name in CMD_SLIDER_NAMES:
+        act_id = actuator_id(model, name)
         if act_id >= 0:
-            result[i] = float(data.ctrl[act_id])
-    return result[0], result[1]
+            result[name] = float(data.ctrl[act_id])
+        else:
+            result[name] = 0.0
+    return result
 
 
-def _restore_cmd_sliders(model: Any, data: Any, linear_x: float, angular_z: float) -> None:
+def _restore_cmd_sliders(model: Any, data: Any, values: dict[str, float]) -> None:
     """控制器 step 会覆盖 data.ctrl，这里恢复滑块值使其持续生效。"""
-    import mujoco
-    for name, val in zip(CMD_SLIDER_NAMES, (linear_x, angular_z)):
-        act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+    for name, val in values.items():
+        act_id = actuator_id(model, name)
         if act_id >= 0:
             data.ctrl[act_id] = val
 
@@ -218,10 +228,14 @@ def run_controlled_viewer_loop(
         with viewer.lock():
             while data.time < target_sim_time:
                 # 读取用户滑块指令
-                linear_x, angular_z = _read_cmd_sliders(model, data)
+                cmd_sliders = _read_cmd_sliders(model, data)
+                linear_x = cmd_sliders["cmd_linear_x"]
+                angular_z = cmd_sliders["cmd_angular_z"]
+                height = cmd_sliders["cmd_height"]
                 if isinstance(controller, CombinedController):
                     controller.params.target_velocity = linear_x
                     controller.params.target_yaw_rate = angular_z
+                    controller.params.vmc.nominal_height = height
 
                 target_info = ""
                 params = getattr(controller, "params", None)
@@ -232,10 +246,10 @@ def run_controlled_viewer_loop(
                 nominal_height = getattr(vmc, "nominal_height", None)
                 if nominal_height is not None:
                     target_info += f",h={nominal_height:.3f}"
-                        
+
                 finite = step_controlled_model(model, data, controller, telemetry_logger, target_info)
                 # 恢复滑块值（step 会覆盖 data.ctrl）
-                _restore_cmd_sliders(model, data, linear_x, angular_z)
+                _restore_cmd_sliders(model, data, cmd_sliders)
                 if not finite:
                     return
         viewer.sync()
@@ -302,6 +316,11 @@ def main() -> None:
 
     model, data = build_controlled_model(args.xml, cache_dir=args.cache_dir)
     controller = create_controlled_controller(args.controller, args.scenario)
+
+    if isinstance(controller, CombinedController):
+        height_act = actuator_id(model, "cmd_height")
+        if height_act >= 0:
+            data.ctrl[height_act] = controller.params.vmc.nominal_height
 
     system_logger.info("Model built and controller created. Starting simulation loop.")
 

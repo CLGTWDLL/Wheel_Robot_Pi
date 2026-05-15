@@ -41,7 +41,10 @@ class LqrController:
         if not np.all(np.isfinite(current)):
             raise ValueError("LQR state must be finite")
         raw_control = self.feedforward - self.gain @ (current - self.target)
-        clipped = np.clip(raw_control, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
+        if raw_control.shape == (model.nu,):
+            clipped = np.clip(raw_control, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
+        else:
+            clipped = raw_control
         if not np.all(np.isfinite(clipped)):
             raise ValueError("LQR control must be finite")
         return clipped

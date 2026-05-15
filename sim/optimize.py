@@ -164,9 +164,9 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
     """
     return CombinedParams(
         vmc=VmcParams(
-            nominal_height=trial.suggest_float("nominal_height", 0.55, 0.75),
-            kp_height=trial.suggest_float("kp_height", 10.0, 500.0, log=True),
-            kd_height=trial.suggest_float("kd_height", 3.0, 60.0, log=True),
+            nominal_height=trial.suggest_float("nominal_height", 0.135, 0.148),
+            kp_motor=trial.suggest_float("kp_motor", 10.0, 200.0, log=True),
+            kd_motor=trial.suggest_float("kd_motor", 1.0, 30.0, log=True),
             crouch_offset=trial.suggest_float("crouch_offset", -0.04, 0.02),
             extend_offset=trial.suggest_float("extend_offset", 0.0, 0.12),
             landing_damping=trial.suggest_float("landing_damping", 0.0, 3.0),
@@ -174,6 +174,8 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
         q_diag=np.array([
             trial.suggest_float("q_pitch", 1000.0, 100000.0, log=True),
             trial.suggest_float("q_pitch_rate", 100.0, 20000.0, log=True),
+            trial.suggest_float("q_roll", 1000.0, 100000.0, log=True),
+            trial.suggest_float("q_roll_rate", 100.0, 20000.0, log=True),
             trial.suggest_float("q_wheel_pos", 0.01, 200.0, log=True),
             trial.suggest_float("q_wheel_vel", 1e-4, 20.0, log=True),
         ]),
@@ -353,16 +355,18 @@ def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> Optimizat
 
     if config.warm_start:
         study.enqueue_trial({
-            "nominal_height": max(0.55, min(0.75, STAND_PARAMS.vmc.nominal_height)),
-            "kp_height": max(10.0, STAND_PARAMS.vmc.kp_height),
-            "kd_height": max(3.0, min(60.0, STAND_PARAMS.vmc.kd_height)),
+            "nominal_height": max(0.135, min(0.148, STAND_PARAMS.vmc.nominal_height)),
+            "kp_motor": max(10.0, min(200.0, STAND_PARAMS.vmc.kp_motor)),
+            "kd_motor": max(1.0, min(30.0, STAND_PARAMS.vmc.kd_motor)),
             "crouch_offset": max(-0.04, min(0.02, STAND_PARAMS.vmc.crouch_offset)),
             "extend_offset": max(0.0, min(0.12, STAND_PARAMS.vmc.extend_offset)),
             "landing_damping": max(0.0, min(3.0, STAND_PARAMS.vmc.landing_damping)),
             "q_pitch": max(1000.0, STAND_PARAMS.q_diag[0]),
             "q_pitch_rate": max(100.0, STAND_PARAMS.q_diag[1]),
-            "q_wheel_pos": max(0.01, STAND_PARAMS.q_diag[2]),
-            "q_wheel_vel": max(1e-4, STAND_PARAMS.q_diag[3]),
+            "q_roll": max(1000.0, STAND_PARAMS.q_diag[2]),
+            "q_roll_rate": max(100.0, STAND_PARAMS.q_diag[3]),
+            "q_wheel_pos": max(0.01, STAND_PARAMS.q_diag[4]),
+            "q_wheel_vel": max(1e-4, STAND_PARAMS.q_diag[5]),
             "r_torque1": max(0.1, STAND_PARAMS.r_diag[0]),
             "r_torque2": max(0.1, STAND_PARAMS.r_diag[1]),
             "velocity_kp": max(0.01, STAND_PARAMS.velocity_kp),
