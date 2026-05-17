@@ -159,6 +159,40 @@ def _com_height_above_wheels(model: Any, data: Any) -> float:
     return abs(float(height))
 
 
+def equilibrium_pitch_from_geometry(model: Any, data: Any) -> float:
+    """当前关节构型下,CoM 落到 wheel_mid 正上方所需的 pitch 偏置(项目约定)。
+
+    几何推导: 设 CoM 相对 wheel_mid 在本体系下偏移 [_, dy, dz]。绕本体 X 轴
+    旋转 θ 后,世界系 Y 分量 = cos(θ)*dy - sin(θ)*dz。稳态 → tan(θ) = dy/dz。
+    项目 pitch 约定 (pitch>0=前倾) 与数学旋转角差一个负号,故返回 -atan2(dy, dz)。
+
+    每次调用都重算,跟随腿高度变化。
+    """
+    mujoco.mj_forward(model, data)
+    masses = np.asarray(model.body_mass, dtype=float)
+    total_mass = float(masses.sum())
+    if total_mass <= 0.0:
+        raise ValueError("model mass must be positive")
+    com_world = (masses[:, None] * np.asarray(data.xipos)).sum(axis=0) / total_mass
+    wheel_ids = [
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        for body_name in ("wheel_left", "wheel_right")
+    ]
+    if any(b == -1 for b in wheel_ids):
+        raise ValueError("missing wheel bodies for equilibrium pitch")
+    wheel_mid = np.mean([data.xipos[b] for b in wheel_ids], axis=0)
+    base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
+    if base_id == -1:
+        raise ValueError("missing base_link body")
+    rotation = np.asarray(data.xmat[base_id]).reshape(3, 3)
+    offset_body = rotation.T @ (com_world - wheel_mid)
+    dy = float(offset_body[1])
+    dz = float(offset_body[2])
+    if not np.isfinite(dy) or not np.isfinite(dz) or abs(dz) < 1e-6:
+        raise ValueError("invalid CoM/wheel geometry for equilibrium pitch")
+    return float(-np.arctan2(dy, dz))
+
+
 def _track_width(model: Any, data: Any) -> float:
     mujoco.mj_forward(model, data)
     wheel_ids = [

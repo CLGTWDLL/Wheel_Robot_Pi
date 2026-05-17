@@ -10,7 +10,7 @@
 
 ### [x] 1. cmd_height 下限偏高，机器人还能更矮
 
-**完成状态**：runtime 已接到扩展 LUT，`launch_mujoco` 的 `cmd_height` slider 现在是 `[0.118, 0.148]`，初始值会设为 `STAND_PARAMS.vmc.nominal_height = 0.142`，避免打开 viewer 时 `data.ctrl=0` 被 clamp 到最低高度。
+**完成状态**：runtime 已接到扩展 LUT。当前 `launch_mujoco` 的 `cmd_height` slider 是 `[0.118, 0.142]`，初始值会设为 `STAND_PARAMS.vmc.nominal_height = 0.142`，避免打开 viewer 时 `data.ctrl=0` 被 clamp 到最低高度。LUT 本身仍覆盖到约 `0.1485`，但运行时上限暂收窄到 `0.142`。
 
 **现象**：旧 `cmd_height` ctrlrange = `[0.135, 0.148]`，机体最低 `pos_z ≈ 0.166`。但机械上腿还能继续收。
 
@@ -27,7 +27,7 @@
 **验证**：
 - `uv run python scripts/verify_height_sweep.py` → PASS：command range `[0.1188, 0.1475]`，leg_h range `[0.1206, 0.1501]`，pos_z_span `0.0302`，max_abs_pitch `0.1010`，fell=False
 - `uv run pytest tests/test_leg_height_lut.py tests/test_vmc_geometry.py tests/test_balance_roll_6d.py -q` → 19 passed
-- `build_controlled_model()` 生成模型中 `cmd_height ctrlrange=[0.118, 0.148]`、初始 `data.ctrl=0.142`
+- 受控模型中 `cmd_height ctrlrange=[0.118, 0.142]`、初始 `data.ctrl=0.142`
 
 **后续风险**：
 - `verify_cmd_height_tracking.py` 仍按旧的“绝对 pitch < 0.02 / 每段 drift < 5mm”严格指标失败；这属于 P0-2 的指标定义问题，不阻塞 launch 全范围高度调节。
@@ -68,9 +68,9 @@
 
 `JumpPhase.CROUCH/EXTEND` 现在通过 `crouch_offset` / `extend_offset` 加到 `target_height` 再经 LUT clamp 转 motor 角，但 jump 场景从未在新路径下跑过。
 
-### [ ] 5. `STAND_THEN_DRIVE_PARAMS` 在新模型下不可用
+### [x] 5. `STAND_THEN_DRIVE_PARAMS` 已按当前模型替换
 
-来自 `docs/lessons_learned.md`：该参数集由 Optuna 在错误的 `WHEEL_FORWARD_SIGNS=+1` 下优化得到，新物理模型下会弹飞。drive 场景目前临时回退到 `STAND_PARAMS`，需要重跑 Optuna 优化。
+当前 `sim/controllers/default_params.py` 中的 `STAND_THEN_DRIVE_PARAMS` 已替换为 5D LQR 参数，默认注释记录 drive 已在 headless 中验证到 `0.5 m/s`。后续可重新跑 Optuna 提升 drive 表现，但这不再是“不可用”阻塞项。
 
 ---
 
@@ -79,14 +79,16 @@
 ### [ ] 6. 把本次根因回写到 `docs/lessons_learned.md` 主索引
 
 需要追加的两条核心教训：
-1. **任务空间 VMC 在 5-bar 奇异处放大力矩** → 雅可比奇异 × ±5 Nm ctrlrange × 单腿 3.46 Nm 重力支撑 → 高档翻倒。解决方案是 joint-space PID + 离线 h↔θ LUT。
-2. **`pitch_trim` 与模型脱钩的陷阱**：早期 `STAND_PARAMS.pitch_trim = -0.07` 来自旧 CoM 偏置；commit `c3bd654` 把 CoM 对齐到轮心之后没人更新参数，启动瞬间 `0 − (−0.07) = 0.07` 直接把 wheel ctrl 推到 ±1 饱和，稳态 `vel_y ≈ −0.15 m/s` 单向漂移。
+1. **任务空间 VMC 在 5-bar 奇异处放大力矩** → 雅可比奇异 × 旧高度反馈路径导致高档翻倒。当前解决方案是 joint-space PID + 离线 h↔θ LUT。
+2. **历史 `pitch_trim` 与模型脱节的陷阱**：早期 `STAND_PARAMS.pitch_trim = -0.07` 来自旧 CoM 偏置；当前代码已删除 `pitch_trim`，改用 `equilibrium_pitch_from_geometry()` 按当前几何计算自然平衡 pitch。
 
-### [ ] 7. 模型/控制器关键常量与文档对齐
+### [x] 7. 模型/控制器关键常量已按当前代码更新
 
-- 模型实测总质量 **10.24 kg**（早期文档写的 7.7 kg，已过期）
-- 单腿支撑重力所需力矩 **~3.46 N·m**，ctrlrange ±5 余量 ~30 %
-- **`project_memory.md` 关于 ctrlrange 的描述已过期**：文档写轮 `[-3.0, 3.0]` / 腿 `[-3.5, 3.5]`，但 `sim/model_xml.py:331` 的真值是轮 `[-1.0, 1.0]` / 腿 `[-5.0, 5.0]`。需要修文档（代码是真值，刚核实过）。
+- 当前受控模型质量约 **2.20 kg**。
+- 当前物理 actuator：轮子 `[-1.0, 1.0]`，腿部 MJCF `[-12.5, 12.5]`。
+- 当前控制器软限制：`STAND` / `CROUCH` / `LAND` 阶段腿部限制到 `[-3.5, 3.5]`，`EXTEND` 允许短时峰值。
+- 当前平衡 LQR 为 5D：`[pitch, pitch_rate, roll, roll_rate, wheel_vel]`，不含 `wheel_pos`。
+- 当前 `cmd_height` 运行时范围为 `[0.118, 0.142]`。
 
 ---
 

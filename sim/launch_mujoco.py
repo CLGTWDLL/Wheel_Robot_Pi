@@ -33,7 +33,7 @@ MANUAL_JUMP_PHASE_PARAMS = JumpPhaseParams(
     extend_duration=0.05,
     extend_timeout=1.00,
     flight_timeout=0.60,
-    recover_duration=0.20,
+    land_duration=0.20,
 )
 
 

@@ -94,7 +94,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 坐标系与符号
 
-- 当前受控模型使用 `link23_connected_stand` keyframe 作为启动姿态。
+- 当前受控模型使用 `stand` keyframe 作为启动姿态。
 - 根关节是 MuJoCo freejoint：
   - `qpos[0:3]` 是 root 位置。
   - `qpos[3:7]` 是 root 四元数。
@@ -161,22 +161,30 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
    - MuJoCo 的四元数顺序为 `[w, x, y, z]`。
    - 代码中的 `pitch` 状态有专门的解析逻辑（见 `sim/state.py` 中的 `_pitch_from_quaternion`），它是基于局部 Y 轴计算的倾角。
    - **禁止**盲目引入 `scipy.spatial.transform` 等外部库的欧拉角转换函数，这极易引入旋转顺序（如 xyz 与 zyx）不一致或万向节死锁问题。
-3. **避免位置环“橡皮筋”效应**：
-   - `CombinedController` 在计算 LQR 时，会每步动态更新目标轮子位置（`target[2]`），以实现平滑的速度跟踪。
-   - **禁止**将 LQR 的目标轮子位置硬编码重置为静态 `0.0`，否则机器人在移动后会受到巨大的反向“橡皮筋”拉力。
-4. **积分抗饱和 (Anti-Windup)**：
+3. **LQR 状态边界：5D 内环，不含 wheel_pos**：
+   - `CombinedController` 的平衡 LQR state 是 `[pitch, pitch_rate, roll, roll_rate, wheel_vel]`。
+   - **禁止**把 `wheel_pos` 放回 LQR 内环，也不要用静态位置目标把轮子“拉回原点”。`wheel_pos` 是平衡过程中轮子追随 CoM 的结果，不是内环平衡目标。
+   - 如果将来需要抑制长期漂移，只能在 LQR 外侧加慢速 position anchor / velocity target 调整，并且必须用短时 stand、延迟单跳、双跳 rollout 验证。
+4. **跳跃相位职责**：
+   - 当前相位机为 `STAND → CROUCH → EXTEND → FLIGHT → LAND → STAND`，另有终态 `FALLEN`。
+   - 不再有 `RECOVER` 相位；`JumpPhaseParams.land_duration` 是 LAND 保持时间，满足接触和竖直速度条件后直接回 `STAND`。
+5. **不要把承载稳定性的路径当死代码删除**：
+   - `flight_wheel_q` 飞行期 LQR 权重调度仍影响落地稳定；删除它会导致延迟跳跃在 LAND 进入 `FALLEN`。
+   - `_height_wheel_velocity_ff` / `ff_gain` 仍用于高度变化时的轮速目标补偿；删除它会导致跳跃 rollout 落地失败。
+   - 删除这些路径前必须至少跑：`uv run pytest tests/ -q`、延迟单跳 headless rollout、双跳 headless rollout。
+6. **积分抗饱和 (Anti-Windup)**：
    - 速度前馈 (`_velocity_integral`) 和 Yaw 修正 (`_yaw_integral`) 的 PI 控制器都实现了积分抗饱和（条件累加和 `np.clip` 限幅）。
    - **禁止**在重构控制逻辑时删除这些抗饱和与限幅逻辑，否则会导致极其剧烈的震荡和失控。
-5. **禁止硬编码索引**：
+7. **禁止硬编码索引**：
    - 由于加入了 `cmd_` 命令滑块，MuJoCo 的 actuator 索引经常变动。
    - **绝对禁止**使用 `data.ctrl[0]` 或 `data.qpos[7]` 这样的魔法数字硬编码。
    - 所有的关节和执行器必须通过 `sim/model_semantics.py` 中的 `MODEL_SEMANTICS` 和 `sim/state.py` 中的 `model_addresses()` 动态获取索引。
-6. **模型预处理管线 (预处理后才是真理)**：
+8. **模型预处理管线 (预处理后才是真理)**：
    - 当前机器人仿真源文件是 `sim/robot/robot.urdf`；项目不使用手写 XML 文件作为仿真入口。
    - 真实的物理仿真模型是在 `launch_mujoco.py` 运行时，由 `sim/model_xml.py` 中的 `prepare_controlled_mujoco_xml` 从 URDF 转换并动态生成 MJCF。
    - 该 Python 脚本会执行许多关键“魔改”：比如将所有 mesh 设为纯视觉（visual-only）、强行注入 `sphere` 碰撞体作为轮子（比 cylinder 更利于 LQR 平滑控制）、强行注入 `root` freejoint、以及注入命令滑块等。
    - **禁止**仅凭阅读历史 `.xml` 文件就得出系统结构结论，更不要盲目添加复杂的碰撞网格。任何针对仿真物理环境的判断，必须以 `sim/model_xml.py` 从 URDF 生成并处理后的动态 MJCF 模型为准。
-7. **代码注释只是参考，必须用脚本核实**：
+9. **代码注释只是参考，必须用脚本核实**：
    - 仓库经历了多次模型重构（鸟腿 0.47m → 当前五连杆 0.18m 高度），URDF、keyframe、CoM、平衡 pitch、摆杆长度等几何量都已多次变更。
    - 代码与文档中（包括 `model_xml.py`、`default_params.py`、`docs/lessons_learned.md`、本文件）出现的所有具体数值——CoM 偏移、平衡 pitch、摆杆长度、轮距、合理 `pitch_trim` 范围等——都可能是**前一版模型的遗留**，与当前模型不一致。
    - **禁止**在调参或决策时直接引用注释中的数字。任何涉及几何量的判断，必须临时写脚本用 `mj_resetDataKeyframe` + `mj_forward` 重新计算（参考 CoM 偏移测量套路：`(masses[:,None]*data.xipos).sum(0)/total_mass` 减去 `0.5*(wheel_l.xipos + wheel_r.xipos)`）。
@@ -224,9 +232,10 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 #### 仿真 ctrlrange 规则
 
-- `sim/model_xml.py:_replace_actuators` 中：轮子 `ctrlrange = "-1.0 1.0"`，腿 `ctrlrange = "-3.5 3.5"`。
-- **数值必须取额定扭矩，不是峰值**。原因：仿真控制器找到的解会贴着 ctrlrange 上限运行；若仿真用峰值，上机会瞬间过载或过热。
-- 任何提案"放大 ctrlrange 以让控制器更易收敛"的修改，必须先通过现场验证与短时峰值限制（duty cycle）的实测支撑；不得擅自把这两个值改大。
+- `sim/model_xml.py:_replace_actuators` 中：轮子 `ctrlrange = "-1.0 1.0"`，腿 `ctrlrange = "-12.5 12.5"`。
+- 腿部 ±12.5 N·m 只用于 `EXTEND` 短时起跳峰值；`VmcController` 和 `CombinedController` 在 `STAND` / `CROUCH` / `LAND` 阶段继续把腿部输出限制到 ±3.5 N·m 额定扭矩。
+- 轮子仍按 DMH6215 额定扭矩 ±1.0 N·m 限制，不允许为了让 LQR 更容易站稳而放大。
+- 任何扩大持续工作扭矩的修改，必须先有现场验证与短时峰值占空比实测支撑；不得擅自把额定阶段的软限幅改大。
 
 #### 常见误读警告
 
@@ -255,16 +264,16 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
   - VMC `kp_motor 50→30, kd_motor 4→1.0`（按质量比例缩小，旧值在 0.74 N·m 单腿支撑下过激）
   - LQR `q_diag[0,2] (pitch/roll) 5000→1000`：允许 ±0.03 rad 自然倾斜以吸收 CoM 偏移
   - LQR `r_diag 200×`：补偿 B 矩阵 ~7× 增益（B ∝ 1/(M·L)）防止饱和
-  - `pitch_trim 0→-0.02`：CoM y 偏移 / 摆杆长度 ≈ 自然平衡 pitch
+  - 已删除 `pitch_trim`：当前用 `equilibrium_pitch_from_geometry()` 按当前几何实时计算自然平衡 pitch
   - Headless 验证：stand 10s、drive 0.3/0.5 m/s、yaw 0.5 rad/s、cmd_height 0.135-0.148 全部稳定，饱和率 < 5%
-- **跳跃能力下降未调**：`jump_extend_feedforward=120 N·m` 被新 ctrlrange ±3.5 clip 严重，实测跳跃高度从旧 ~0.15 m 降到 ~0.045 m。若需恢复跳跃高度，参见 `docs/retuning_guide_2026-05-16.md` 的「跳跃高度下降」章节。`test_cmd_jump_rollout_reaches_airborne_contact_state` 阈值已下调至 0.03 m 以匹配现状。
+- **跳跃能力已改为短时峰值窗口**：MJCF 腿 actuator 为 ±12.5 N·m，非 `EXTEND` 阶段软限幅仍为 ±3.5 N·m；当前 `STAND_PARAMS` 使用 `jump_extend_feedforward=8.0`，`STAND_THEN_DRIVE_PARAMS` 使用 `9.0`。
 - **cmd_height 上限收窄**：从 0.148 → 0.142。h>0.142 时 LUT `d²h/dθ²` 符号翻转 + LQR 线性化漂移导致自激振荡。若需恢复 0.148 全行程，需 LQR gain scheduling 或 LUT 边界平滑。
 
 #### 不要做的事
 
 - 不要把 wheel mass 调回 CAD 原始的 0.955 kg（那是 SolidWorks 默认密度下的虚假值，与实机不符）。
 - 不要把 base_link 推回 6.7 kg（同理）。
-- 不要在 `_replace_actuators` 里把腿的 ctrlrange 放回 ±320（旧的占位无意义值），也不要写回 ±3.0 或 ±5.0。
+- 不要在 `_replace_actuators` 里把腿的 ctrlrange 放回 ±320（旧的占位无意义值），也不要写回 ±3.0 或 ±5.0；当前代码需要 ±12.5 给 `EXTEND` 短时起跳峰值，额定限制在控制器软限幅里实现。
 - 不要在 docs/代码注释里写 "DMH6215 T_MAX=10Nm" 这种把 CAN 映射范围当成物理极限的表述。
 
 ### 电机与 IMU CAN 配置
@@ -391,9 +400,9 @@ PyMeshLab `meshing_decimation_quadric_edge_collapse` 的关键开关（缺一影
 跳跃落地 (`JumpPhase.LAND`) 期间 viewer 严重卡顿，但站立、行驶时完全流畅。`mj_step` 本身始终在 µs 级，**瓶颈不在物理引擎**。
 
 ### 根因（已修复，2026-05-17）
-`CombinedController._ensure_lqr_height_bin` 每步用 `(height_bin, roll_bin)` 作为 key 查 `_lqr_gain_cache`，cache miss 触发 `compute_balance_lqr_gain`：
+`CombinedController._ensure_lqr_height_bin` 每步用 `(height_bin, roll_bin)` 作为 key 查 `_lqr_gain_cache`，cache miss 触发 `_compute_lqr_gain()` → `compute_balance_lqr_gain_5d()`：
 - 3× `mj_forward` 全模型 kinematics 重算
-- `solve_discrete_lqr` 跑 500 次迭代的 Python value iteration
+- `solve_discrete_lqr` 通过 `scipy.linalg.solve_discrete_are` 求 5D DARE
 
 bin 粒度 `lqr_height_bin_size=0.02 m`、`roll_bin_size=0.02 rad`。**落地瞬间身体 z 跌 5-10 cm、roll 弹动 5-10°，每 1-2 步跨一个新桶**，单步 controller 耗时从 0.22 ms 飙到 7.26 ms（×30 倍），166 步 land × 7.26 ms = 1.2 s 墙钟卡顿。
 
@@ -401,28 +410,28 @@ bin 粒度 `lqr_height_bin_size=0.02 m`、`roll_bin_size=0.02 rad`。**落地瞬
 **只需把 `solve_discrete_lqr` 改用 `scipy.linalg.solve_discrete_are`**（Schur 分解一次出解），单次重算从 ~14 ms 跌到 < 0.5 ms。166 次 land cache-miss 总成本变成 ~80 ms 摊到 332 ms 落地窗口，每步多 0.05 ms，完全无感。
 
 ### 反面教训：不要跳过落地的 LQR 增益重算
-**走过的弯路**：曾经在 FLIGHT / LAND / FAIL 阶段跳过 `_ensure_lqr_height_bin`，假设「接触瞬态脱离倒立摆模型，VMC 主导腿，LQR 增益微调没意义」。**这是错的**。已实测：跳过 LAND 重算后，机器人复用 EXTEND 末态高度（~0.15 m）的增益，落地时实际 pendulum_length 跌到 0.06-0.09 m，倒立摆失稳项 `g/L` 翻倍，**LQR 反馈不足以接住后仰动量**，落地末态留下 -0.17 rad 后仰 → recover 没扳回来 → stand 阶段 pitch 一路漂到 -1.0 rad 触发 FALLEN（注：自起立机制已在 2026-05-17 移除，FALLEN 现为终态零控）。
+**走过的弯路**：曾经在 FLIGHT / LAND 阶段跳过 `_ensure_lqr_height_bin`，假设「接触瞬态脱离倒立摆模型，VMC 主导腿，LQR 增益微调没意义」。**这是错的**。已实测：跳过 LAND 重算后，机器人复用 EXTEND 末态高度（~0.15 m）的增益，落地时实际 pendulum_length 跌到 0.06-0.09 m，倒立摆失稳项 `g/L` 翻倍，**LQR 反馈不足以接住后仰动量**，落地末态留下 -0.17 rad 后仰 → stand 阶段 pitch 一路漂到 -1.0 rad 触发 FALLEN（FALLEN 现为终态零控）。
 
 **结论**：LQR 增益依赖摆杆长度的物理参数，**落地阶段的增益必须按真实低高度重算，否则机器人会倒**。性能优化时不要省「物理上必须做的事」。
 
-### Phase Machine 与倒地处理（2026-05-17 当前状态）
-- JumpPhase 现有 7 个：STAND / CROUCH / EXTEND / FLIGHT / LAND / RECOVER / FALLEN。已删除 SELF_RIGHT、FAIL、FallRecoveryParams 及全部自起立逻辑。
+### Phase Machine 与倒地处理（2026-05-18 当前代码）
+- JumpPhase 现有 6 个：STAND / CROUCH / EXTEND / FLIGHT / LAND / FALLEN。已删除 RECOVER、SELF_RIGHT、FAIL、FallRecoveryParams 及全部自起立逻辑。
 - FALLEN 是**终态**：pitch 超过 `pitch_fallen_threshold` (1.0 rad) 即进入，进入后所有控制器输出零（`combined.py:__call__` 和 `vmc.py` 都早返回 zeros），机器人原地不动，需重启仿真才能复位。
 - **不要**重新引入自起立 / `SELF_RIGHT` / `recovery_attempts`：实测过 3 次自起立全失败、机器人在三次循环间反复滑动，比一动不动更糟。如果未来需要恢复跌倒后行为，先证明自起立动作能实际把机器人扳直，再加状态机。
 - FALLEN 只看 pitch，不看 roll：本项目机器人在仿真里的实际倒地都是前后扑（pitch ±1.5 rad 量级），侧倒（roll 大）不出现。未来如机器人换形态或环境，可能需要 roll 也加入阈值。
 
-### 隐藏陷阱：iterative Riccati 一直没收敛，整套 Q/R 调参是基于伪 LQR
-**2026-05-17 实测**：旧 `solve_discrete_lqr` 的 500 步 value iteration 在本项目所有合理 L (0.06-0.15 m) 下**全部跑满 500 步未达 1e-10 tolerance**，与 scipy DARE 真解相对误差 ~6.6%。最致命的是 `K[0,4]`（轮位 → 轮扭矩）项：
+### 隐藏陷阱：旧 iterative Riccati 没收敛，旧 6D 调参基于伪 LQR
+**2026-05-17 实测**：旧 `solve_discrete_lqr` 的 500 步 value iteration 在本项目所有合理 L (0.06-0.15 m) 下**全部跑满 500 步未达 1e-10 tolerance**，与 scipy DARE 真解相对误差 ~6.6%。在旧 6D LQR 中，最致命的是 `K[0,4]`（wheel_pos → 轮扭矩）项：
 - 迭代版 ≈ -0.08（位置反馈被「衰减」掉）
 - DARE 真解 ≈ -0.45（**5.7 倍**强）
 
-这意味着**项目里所有 Q/R 调参都是建在「位置反馈被严重弱化的非收敛 LQR」之上的伪调参**。换 scipy DARE 等于把这个隐藏 bug 拿掉，控制律会突然变「严苛」，**起跳累积的小轮位漂移会被强位置反馈翻译成 ~3.5 N·m 轮扭矩瞬态，反作用把机器人前栽到地上**。
+这意味着旧 6D Q/R 调参曾经建在「位置反馈被严重弱化的非收敛 LQR」之上。当前代码已经改为 5D LQR，`wheel_pos` 不在内环 state 中；不要把旧 6D 的位置反馈修补方式搬回当前控制器。
 
-### 应对方式（2026-05-17 已采用）
-保留 scipy DARE，**在 LAND/RECOVER 阶段把 `target[4] = current_wheel_pos`**（`combined.py:_update_lqr_target` 里 `reset_wheel_pos_target` 集合扩到 FLIGHT/LAND/RECOVER）。物理直觉：落地瞬态不追究你跑了多远，先把姿态接住再说。Q/R 不动，stand 模式下位置反馈仍正常工作。
+### 当前 5D 应对方式（2026-05-18 当前代码）
+保留 scipy DARE，平衡内环固定为 5D：`[pitch, pitch_rate, roll, roll_rate, wheel_vel]`。`target[4]` 是 `wheel_vel` 目标，不是 `wheel_pos`；FLIGHT 阶段释放为 0，LAND 阶段不使用位置目标，STAND 静止漂移由慢速 position anchor 外环转成速度目标处理。
 
 ### 类似陷阱的通用警示
-- **任何手写迭代数值算法，先验证它是否收敛**。`solve_discrete_lqr` 这种 200 行的库函数感觉简单，但本项目这版在常见参数下 500 步都不收敛，长期被当成「正确 LQR」使用。
+- **任何手写迭代数值算法，先验证它是否收敛**。旧版 `solve_discrete_lqr` 的 value iteration 在常见参数下 500 步都不收敛，却长期被当成「正确 LQR」使用。
 - **替换数值库时务必做 A/B 对比**：DARE vs iterative、`np.linalg.solve` vs `np.linalg.lstsq` 等切换可能在「看起来都对」的情况下产生 ×5 增益差。任何「换更准的库函数」前，先打印两边输出对比一次。
 - **基于伪 LQR 调出来的参数不能直接搬到真 LQR**。若未来要重新调 Q/R，先确认底层 solver 是收敛的。
 

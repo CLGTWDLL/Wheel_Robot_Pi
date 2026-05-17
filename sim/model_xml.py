@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from math import atan2, cos, sin
 from pathlib import Path
 
+import imageio.v3 as iio
 import mujoco
+import numpy as np
 
 from sim.model_semantics import MODEL_SEMANTICS, WHEEL_RADIUS
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
@@ -21,9 +23,21 @@ class SingleWheelTrapezoidTerrain:
     height: float = 0.035
     ramp_length: float = 0.20
     platform_length: float = 0.25
-    width: float = 0.80
+    width: float = 0.40
     x_start: float = 0.22
     thickness: float = 0.02
+
+
+@dataclass(frozen=True)
+class RockRoadTerrain:
+    x_start: float = 1.05
+    length: float = 1.20
+    width: float = 0.60
+    max_height: float = 0.018
+    base_depth: float = 0.02
+    nrow: int = 25
+    ncol: int = 49
+    seed: int = 20260518
 
 
 def _urdf_to_mjcf(urdf_path: Path, output_dir: Path) -> Path:
@@ -82,7 +96,7 @@ def prepare_controlled_mujoco_xml(
 
     _make_mesh_paths_absolute(root, prepared_xml.parent)
     _ensure_world_environment(root)
-    _ensure_test_terrain(root, terrain, terrain_side)
+    _ensure_test_terrain(root, terrain, terrain_side, output_root)
     _ensure_root_freejoint(root)
     _ensure_command_slider_joints(root)
     _configure_geom_collisions(root)
@@ -169,12 +183,13 @@ def _ensure_world_environment(root: ET.Element) -> None:
         root.insert(0, ET.Element("option", {"gravity": "0 0 -9.81"}))
 
 
-def _ensure_test_terrain(root: ET.Element, terrain: str | None, terrain_side: str) -> None:
+def _ensure_test_terrain(root: ET.Element, terrain: str | None, terrain_side: str, output_root: Path) -> None:
     if terrain is None:
         return
     if terrain != "single_wheel_trapezoid":
         raise ValueError(f"unsupported terrain: {terrain}")
     _add_single_wheel_trapezoid(root, SingleWheelTrapezoidTerrain(side=terrain_side))
+    _add_rock_road(root, RockRoadTerrain(), output_root)
 
 
 def _add_single_wheel_trapezoid(root: ET.Element, config: SingleWheelTrapezoidTerrain) -> None:
@@ -249,7 +264,100 @@ def _terrain_box(
     ET.SubElement(worldbody, "geom", attrs)
 
 
+def _add_rock_road(root: ET.Element, config: RockRoadTerrain, output_root: Path) -> None:
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        raise ValueError("MuJoCo XML is missing <worldbody>")
+    if worldbody.find("geom[@name='rock_road']") is not None:
+        return
+
+    if min(config.length, config.width, config.max_height, config.base_depth) <= 0.0:
+        raise ValueError("rock road terrain dimensions must be positive")
+    if config.nrow < 2 or config.ncol < 2:
+        raise ValueError("rock road heightfield resolution must be at least 2x2")
+
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+
+    heightmap_path = output_root / "rock_road_hfield.png"
+    iio.imwrite(heightmap_path, _rock_road_heightmap(config))
+
+    if asset.find("hfield[@name='rock_road_hfield']") is None:
+        ET.SubElement(
+            asset,
+            "hfield",
+            {
+                "name": "rock_road_hfield",
+                "file": str(heightmap_path),
+                "size": _format_float_quad(
+                    (
+                        0.5 * config.length,
+                        0.5 * config.width,
+                        config.max_height,
+                        config.base_depth,
+                    )
+                ),
+            },
+        )
+
+    ET.SubElement(
+        worldbody,
+        "geom",
+        {
+            "name": "rock_road",
+            "type": "hfield",
+            "hfield": "rock_road_hfield",
+            "pos": _format_float_triplet((config.x_start + 0.5 * config.length, 0.0, 0.0)),
+            "contype": "1",
+            "conaffinity": "1",
+            "friction": "1.0 0.02 0.001",
+            "rgba": "0.32 0.31 0.28 1",
+        },
+    )
+
+
+def _rock_road_heightmap(config: RockRoadTerrain) -> np.ndarray:
+    rng = np.random.default_rng(config.seed)
+    x = np.linspace(0.0, 1.0, config.ncol)
+    y = np.linspace(-1.0, 1.0, config.nrow)
+    xx, yy = np.meshgrid(x, y)
+
+    rough = rng.uniform(0.0, 1.0, size=(config.nrow, config.ncol))
+    for _ in range(2):
+        rough = (
+            rough
+            + np.roll(rough, 1, axis=0)
+            + np.roll(rough, -1, axis=0)
+            + np.roll(rough, 1, axis=1)
+            + np.roll(rough, -1, axis=1)
+        ) / 5.0
+    waves = 0.5 + 0.25 * np.sin(2.0 * np.pi * (3.0 * xx + 0.35 * yy))
+    waves += 0.25 * np.sin(2.0 * np.pi * (5.0 * xx - 0.55 * yy + 0.2))
+    heights = 0.55 * rough + 0.45 * waves
+    heights -= float(np.min(heights))
+    peak = float(np.max(heights))
+    if peak > 0.0:
+        heights /= peak
+
+    edge = 0.16
+    x_envelope = np.minimum(_smoothstep(x / edge), _smoothstep((1.0 - x) / edge))
+    y_edge = np.clip((1.0 - np.abs(y)) / 0.25, 0.0, 1.0)
+    envelope = np.outer(_smoothstep(y_edge), x_envelope)
+    heights = np.clip(heights * envelope, 0.0, 1.0)
+    return np.rint(heights * 255.0).astype(np.uint8)
+
+
+def _smoothstep(values: np.ndarray) -> np.ndarray:
+    clipped = np.clip(values, 0.0, 1.0)
+    return clipped * clipped * (3.0 - 2.0 * clipped)
+
+
 def _format_float_triplet(values: tuple[float, float, float]) -> str:
+    return " ".join(f"{float(value):.9g}" for value in values)
+
+
+def _format_float_quad(values: tuple[float, float, float, float]) -> str:
     return " ".join(f"{float(value):.9g}" for value in values)
 
 

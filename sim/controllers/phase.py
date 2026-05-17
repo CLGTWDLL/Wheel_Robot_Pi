@@ -10,7 +10,6 @@ class JumpPhase(str, Enum):
     EXTEND = "extend"
     FLIGHT = "flight"
     LAND = "land"
-    RECOVER = "recover"
     FALLEN = "fallen"
 
 
@@ -22,7 +21,7 @@ class JumpPhaseParams:
     extend_duration: float = 0.05
     extend_timeout: float = 0.6
     flight_timeout: float = 0.5
-    recover_duration: float = 0.2
+    land_duration: float = 0.2
     pitch_fallen_threshold: float = 1.0
 
 
@@ -74,14 +73,7 @@ class JumpPhaseMachine:
                 self._set_phase(JumpPhase.LAND)
         elif (
             self.phase == JumpPhase.LAND
-            and self.time_in_phase >= self.params.recover_duration
-            and contact_count > 0
-            and (vz is None or abs(vz) < 0.2)
-        ):
-            self._set_phase(JumpPhase.RECOVER)
-        elif (
-            self.phase == JumpPhase.RECOVER
-            and self.time_in_phase >= self.params.recover_duration
+            and self.time_in_phase >= self.params.land_duration
             and contact_count > 0
             and (vz is None or abs(vz) < 0.2)
         ):

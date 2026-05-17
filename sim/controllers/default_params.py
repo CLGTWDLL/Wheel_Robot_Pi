@@ -32,22 +32,24 @@ STAND_PARAMS = CombinedParams(
         gravity_compensation_scale=1.0,
         max_height_rate=0.05,
         # 2026-05-17: 11.5 → 9.0 → 8.0。±1 N·m 轮扭矩不够压住落地冲击 pitch。
-        # 9.0 单跳能稳但双跳第二次落地超限 (pitch 0.160 触地 → 1.023 栽倒)；
+        # 9.0 单跳能稳但双跳第二次落地超限 (pitch 0.160 触地 → 1.023 栽倒);
         # 再降 11% 给落地多留 ~20% 安全边距。
         jump_extend_feedforward=8.0,
         jump_extend_feedforward_duration=0.05,
     ),
     # 2026-05-16 retune after mass rebalance (10.24 kg → 2.20 kg).
     # B matrix scaled ~7× because B ∝ 1/(M·L) and CoM dropped 36 mm.
-    # 2026-05-17 重构到 5D LQR：state 为 [pitch, pitch_rate, roll, roll_rate, wheel_vel]，
-    # 不再包含 wheel_pos。原 Q[4]=50 (wheel_pos) 已删除，原 Q[5]=500 (wheel_vel) 平移到 Q[4]。
+    # 2026-05-17 重构到 5D LQR:state 为 [pitch, pitch_rate, roll, roll_rate, wheel_vel],
+    # 不再包含 wheel_pos。原 Q[4]=50 (wheel_pos) 已删除,原 Q[5]=500 (wheel_vel) 平移到 Q[4]。
+    # 2026-05-18 删除 pitch_trim (改用 equilibrium_pitch_from_geometry 自动计算),
+    # 加入位置外环参数 position_kp / position_velocity_limit。
     q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
     r_diag=np.array([200.0, 400.0]),
-    velocity_kp=0.5,
     velocity_ki=0.3,
-    pitch_trim=-0.02,
-    pitch_trim_from_lut=False,
     pitch_lean_gain=0.15,
+    position_kp=3.0,
+    position_kd=1.5,
+    position_velocity_limit=0.6,
     yaw_damping=0.5,
     yaw_ki=0.0,
     fixed_height=False,
@@ -75,13 +77,14 @@ STAND_THEN_DRIVE_PARAMS = CombinedParams(
     ),
     q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
     r_diag=np.array([200.0, 400.0]),
-    pitch_trim=-0.02,
-    pitch_trim_from_lut=False,
     pitch_lean_gain=0.15,
-    velocity_kp=0.5,
     velocity_ki=0.3,
+    position_kp=3.0,
+    position_kd=1.5,
+    position_velocity_limit=0.6,
     yaw_damping=0.5,
     yaw_ki=0.0,
+    flight_wheel_q=1.0,
 )
 
 # 跳跃相位机默认参数
@@ -113,10 +116,10 @@ def params_to_dict(params: CombinedParams) -> dict[str, Any]:
         "r_diag": params.r_diag.tolist(),
         "target_velocity": params.target_velocity,
         "pitch_lean_gain": params.pitch_lean_gain,
-        "velocity_kp": params.velocity_kp,
         "velocity_ki": params.velocity_ki,
-        "pitch_trim": params.pitch_trim,
-        "pitch_trim_from_lut": params.pitch_trim_from_lut,
+        "position_kp": params.position_kp,
+        "position_kd": params.position_kd,
+        "position_velocity_limit": params.position_velocity_limit,
         "yaw_damping": params.yaw_damping,
         "yaw_ki": params.yaw_ki,
         "target_yaw_rate": params.target_yaw_rate,
@@ -151,10 +154,10 @@ def params_from_dict(d: dict[str, Any]) -> CombinedParams:
         r_diag=np.array(d["r_diag"]),
         target_velocity=d.get("target_velocity", 0.0),
         pitch_lean_gain=d.get("pitch_lean_gain", 0.02),
-        pitch_trim=d.get("pitch_trim", 0.0),
-        pitch_trim_from_lut=d.get("pitch_trim_from_lut", True),
-        velocity_kp=d.get("velocity_kp", 0.5),
         velocity_ki=d.get("velocity_ki", 0.1),
+        position_kp=d.get("position_kp", 1.5),
+        position_kd=d.get("position_kd", 1.5),
+        position_velocity_limit=d.get("position_velocity_limit", 0.3),
         yaw_damping=d.get("yaw_damping", 0.5),
         yaw_ki=d.get("yaw_ki", 0.0),
         target_yaw_rate=d.get("target_yaw_rate", 0.0),

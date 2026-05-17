@@ -213,7 +213,7 @@ class VmcController:
                 control[act_idx] = gravity_torque + pid_torque
 
         clipped = np.clip(control, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
-        if phase in (JumpPhase.STAND, JumpPhase.CROUCH, JumpPhase.LAND, JumpPhase.RECOVER):
+        if phase in (JumpPhase.STAND, JumpPhase.CROUCH, JumpPhase.LAND):
             for geometry in LEG_CLOSED_LOOP.values():
                 act_idx = addresses.actuators[geometry.motor_joint]
                 clipped[act_idx] = float(np.clip(clipped[act_idx], -3.5, 3.5))

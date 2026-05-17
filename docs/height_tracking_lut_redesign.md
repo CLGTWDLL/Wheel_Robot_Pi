@@ -10,11 +10,12 @@
 
 ### 两条独立根因
 
-1. **`pitch_trim` 与模型不匹配**
+1. **历史 `pitch_trim` 与模型不匹配**
    - `STAND_PARAMS.pitch_trim = -0.07` 是早期 CoM 偏置的拟合值
    - commit `c3bd654` ("Adjust base_link CoM to perfectly align horizontally with wheel centers") 之后真实平衡 pitch 接近 0
    - 启动瞬间 LQR 误差 `0 − (−0.07) = 0.07` 把 wheel ctrl 立即推到 ±1 饱和；系统稳定在 `pitch ≈ −0.02, vel ≈ −0.15 m/s` 的偏置均衡
    - 证据：`logs/manual/run_20260513_213408/telemetry.csv`
+   - 当前代码已删除 `pitch_trim` 参数，改用 `equilibrium_pitch_from_geometry()` 按当前几何计算自然平衡 pitch
 
 2. **任务空间 VMC 在 5-bar 奇异处放大力矩**
    - 任务空间反馈 `spring_force = kp_height·height_error − damping·vertical_velocity`，再经 `jacobian` 拼回 motor 力矩
@@ -52,9 +53,9 @@
 | `sim/controllers/leg_height_lut.json` | 新增（生成物） | `theta_grid` / `h_grid` 与边界 |
 | `sim/controllers/leg_height_lut.py` | 新增 | `LegHeightLUT` dataclass + `motor_angle_from_height` |
 | `sim/controllers/vmc.py` | 改 | `VmcParams` 用 `kp_motor/kd_motor` 替 `kp_height/kd_height`；`_control` 查表 + 关节 PID + 现有重力前馈 |
-| `sim/controllers/default_params.py` | 改 | STAND / STAND_THEN_DRIVE：`nominal_height=0.142`、`kp_motor=50`、`kd_motor=4`；`params_to_dict / from_dict` 同步换字段 |
-| `sim/model_xml.py` | 改 | `cmd_height` ctrlrange `"0.04 0.16"` → `"0.135 0.148"` |
-| `sim/optimize.py` | 改 | Optuna search space 与 warm-start 切换到 `kp_motor / kd_motor` 并把 `nominal_height` 收到 [0.135, 0.148] |
+| `sim/controllers/default_params.py` | 改 | 当前 STAND / STAND_THEN_DRIVE：`nominal_height=0.142`、`kp_motor=30`、`kd_motor=1.0`；`params_to_dict / from_dict` 使用 5D `q_diag` |
+| `sim/model_xml.py` | 改 | 当前 `cmd_height` ctrlrange 为 `"0.118 0.142"`；旧 `"0.135 0.148"` 为 2026-05-13 初版范围 |
+| `sim/optimize.py` | 改 | Optuna search space 与 warm-start 切换到 `kp_motor / kd_motor`；当前搜索仍覆盖 [0.135, 0.148]，viewer 运行时上限收窄到 0.142 |
 | `tests/test_vmc_geometry.py` | 改 | `VmcParams` 构造参数名 |
 | `scripts/verify_cmd_height_tracking.py` | 改 | `NOMINAL_HEIGHTS` 改为 `np.linspace(LUT.h_min+ε, LUT.h_max−ε, 5)`；`MIN_POS_Z_SPAN` 改为 `0.6 × LUT span` |
 
@@ -62,10 +63,11 @@
 
 - 模型实测总质量：**2.20 kg**（按实机称重重新分配，详见 `AGENTS.md` 电机参数与质量分配章节）
 - 单腿支撑重力所需力矩：**~0.74 N·m**，ctrlrange ±3.5 余量约 79 %
-- LUT θ 范围：**[0.4380, 0.6027] rad**
-- LUT h 范围：**[0.1339, 0.1485] m**
+- 当前 LUT θ 范围：**[0.2656, 0.6027] rad**
+- 当前 LUT h 范围：**[0.1178, 0.1485] m**
 - LUT 单调：**True**
-- cmd_height ctrlrange：**[0.135, 0.148]**
+- 当前运行时 cmd_height ctrlrange：**[0.118, 0.142]**
+- 历史初版 cmd_height ctrlrange：**[0.135, 0.148]**
 
 ## 验证
 
@@ -106,9 +108,9 @@
 
 - `scripts/probe_leg_geometry.py` 输出 `dy_grid` / `pitch_eq_grid`
 - `LegHeightLUT` 增加 `dy_wheel_dh()` / `pitch_eq_from_height()` / `height_dtheta()`
-- `CombinedController` 默认用 LUT 的高度相关 `pitch_trim`
+- `CombinedController` 使用 `equilibrium_pitch_from_geometry()` 计算自然平衡 pitch；`pitch_eq_from_height()` 仍保留为 LUT 几何辅助，不是当前 LQR 主目标
 - `VmcController` 增加 `max_height_rate` 和 `last_target_motor_rate`
-- `CombinedController` 把升降几何 wheel velocity 注入 LQR target
+- `CombinedController` 把升降几何 wheel velocity 注入 5D LQR 的 `target[4]`，该目标是 `wheel_vel`，不是 `wheel_pos`
 - 新增 `scripts/verify_startup_drift.py`
 
 通过的验证：

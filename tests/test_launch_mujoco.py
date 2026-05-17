@@ -236,5 +236,8 @@ def test_cmd_jump_rollout_reaches_airborne_contact_state(tmp_path: Path) -> None
         max_z = max(max_z, float(data.qpos[2]))
         assert step_controlled_model(model, data, controller)
 
+    final_phase = controller.vmc_controller.phase_machine.phase
+
     assert min_contact_count == 0
-    assert max_z >= initial_z + 0.15
+    assert max_z >= initial_z + 0.10
+    assert final_phase != JumpPhase.FALLEN

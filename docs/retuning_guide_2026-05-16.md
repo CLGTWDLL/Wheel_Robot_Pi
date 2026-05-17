@@ -55,12 +55,14 @@ R×100 + Q=[1000,200,1000,200,**50,500**]：**站住、y 漂 0.086 m、satW=4%**
 - Q[5] (wheel_vel 权重) 必须 ≤ 500，超过 800 立即崩（强行刹车导致摔倒）
 - Q[1]/Q[3] (pitch_rate) 不能低于 200，否则崩
 
-### Step 5：pitch_trim 校准
+### Step 5：历史 pitch_trim 校准
 
 `pitch_trim=-0.02`：drift 仅 0.027 m（最优）。
 等价于 atan(CoM_y_offset / L) = atan(0.012/0.071) ≈ 0.17 rad，符号通过实测确定。
 
 实际稳态 pitch=−0.029 rad（≈ 自然平衡 pitch）。
+
+当前代码已删除 `pitch_trim` 参数，改为在 `CombinedController` 内用 `equilibrium_pitch_from_geometry()` 按当前几何实时计算自然平衡 pitch。
 
 ### Step 6：VMC kp_motor 缩放
 
@@ -68,7 +70,7 @@ kp_motor=80 → **30**（对应 0.21× 旧值，与质量比例 0.215 几乎一�
 kd_motor=2 → **1.0**。
 kp_motor=60+ 时再次失稳（同 R×100 下）。
 
-## 最终参数（已写入 `default_params.py`）
+## 当前参数（以 `sim/controllers/default_params.py` 为准）
 
 ```python
 STAND_PARAMS = CombinedParams(
@@ -76,22 +78,37 @@ STAND_PARAMS = CombinedParams(
         nominal_height=0.142,
         kp_motor=30.0,
         kd_motor=1.0,
+        crouch_offset=-0.02,
+        crouch_target_height=0.09,
+        crouch_duration=0.20,
+        extend_offset=0.02,
+        landing_damping=1.0,
+        land_kp_scale=0.5,
+        land_kd_scale=2.5,
         gravity_compensation_scale=1.0,
         max_height_rate=0.05,
+        jump_extend_feedforward=8.0,
+        jump_extend_feedforward_duration=0.05,
     ),
-    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 50.0, 500.0]),
+    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
     r_diag=np.array([200.0, 400.0]),
-    pitch_trim=-0.02,
-    pitch_trim_from_lut=False,
-    velocity_kp=0.5,
     velocity_ki=0.3,
     pitch_lean_gain=0.15,
+    position_kp=3.0,
+    position_kd=1.5,
+    position_velocity_limit=0.6,
     yaw_damping=0.5,
+    yaw_ki=0.0,
+    fixed_height=False,
+    lqr_height_bin_size=0.02,
+    flight_wheel_q=1.0,
     ff_gain=4.0,
 )
 ```
 
-`STAND_THEN_DRIVE_PARAMS` 使用同一组增益。
+当前 LQR 是 5D：`[pitch, pitch_rate, roll, roll_rate, wheel_vel]`。旧 6D 中的 `wheel_pos` 权重已删除。
+
+`STAND_THEN_DRIVE_PARAMS` 已替换旧 Optuna 参数，当前同样使用 5D `q_diag=[1000,200,1000,200,500]`，`jump_extend_feedforward=9.0`。
 
 ## 验证结果（headless 5–10 s）
 
@@ -122,13 +139,15 @@ STAND_PARAMS = CombinedParams(
 
 EXTEND 阶段已改为短时峰值窗口：MJCF 腿 actuator `ctrlrange` 允许 ±12.5 N·m，VMC/CombinedController 在非 EXTEND 相位继续把腿输出软限制到 ±3.5 N·m。
 
-当前手动调通参数：
+历史手动调通过的参数：
 - `crouch_target_height=0.09`
 - `crouch_duration=0.20`
 - `extend_duration=0.05`
 - `jump_extend_feedforward=11.5`
 
 `tmp/jump_step_response.py` 实测 `max_jump_height=0.1770`、首次落地 `touchdown_abs_pitch=0.0830`。但落地恢复阶段仍有 `max_abs_pitch_after_touchdown≈0.18` 的摆动，尚未达到全恢复窗口 `<0.1 rad`。
+
+当前默认参数已改为 `STAND_PARAMS.jump_extend_feedforward=8.0`、`STAND_THEN_DRIVE_PARAMS.jump_extend_feedforward=9.0`；phase 机不再有 `RECOVER`，LAND 满足接触和竖直速度条件后直接回 `STAND`。
 
 ## 实机部署注意事项
 
@@ -197,7 +216,7 @@ sat_leg   = abs(torque_leg)   >= 0.95 * 3.5   # 4310 额定 3.5 N·m
 
 | 现象 | 可能原因 | 处理 |
 |---|---|---|
-| 静站时 wheel 持续转向某方向 | pitch_trim 实机与仿真不符 | 用 IMU 现场测自然平衡 pitch，更新 `pitch_trim` |
+| 静站时 wheel 持续转向某方向 | 实机自然平衡 pitch 与仿真几何不符 | 用 IMU 和几何脚本复测 CoM / wheel_mid，检查 `equilibrium_pitch_from_geometry()` 的输入 |
 | 高频抖动（10 Hz+） | LQR 增益过大 / 控制延迟 | 降 q_diag[0]、增 r_diag、检查 CAN 链路时延 |
 | 低频前后摇晃（1–3 Hz） | pitch_lean_gain 与 LQR 冲突 | 把 pitch_lean_gain 降到 0.05 |
 | 转弯时机体侧倾不停 | yaw 差速符号错或 roll 控制弱 | 检查 yaw_damping、`LEG_ROLL_DIFF_SIGNS` |
@@ -215,7 +234,7 @@ sat_leg   = abs(torque_leg)   >= 0.95 * 3.5   # 4310 额定 3.5 N·m
 
 ## 未来工作
 
-- 继续调 LAND/RECOVER，目标是把飞行后接触恢复窗口的 `max_abs_pitch_after_touchdown` 从约 0.18 rad 降到 `<0.1 rad`
+- 继续调 LAND 落地窗口，目标是把飞行后接触恢复窗口的 `max_abs_pitch_after_touchdown` 降到 `<0.1 rad`
 - LQR gain scheduling 支持 cmd_height 全范围 [0.118, 0.148]
-- Optuna 自动优化 STAND_THEN_DRIVE_PARAMS（drive 距离最大化 + 转弯抑制）
+- 重新跑 Optuna 检查 `STAND_THEN_DRIVE_PARAMS` 是否还能提升 drive 距离和转弯稳定性
 - 实机 IMU 校准流程文档化

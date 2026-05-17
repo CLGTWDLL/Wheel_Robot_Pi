@@ -13,11 +13,11 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
         q_diag=np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
         r_diag=np.array([7.0, 8.0]),
         target_velocity=0.31,
-        pitch_trim=0.12,
-        pitch_trim_from_lut=False,
         pitch_lean_gain=0.23,
-        velocity_kp=0.34,
         velocity_ki=0.45,
+        position_kp=1.7,
+        position_kd=2.1,
+        position_velocity_limit=0.4,
         yaw_damping=0.56,
         yaw_ki=0.67,
         target_yaw_rate=0.78,
@@ -36,11 +36,11 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
     np.testing.assert_allclose(restored.q_diag, params.q_diag)
     np.testing.assert_allclose(restored.r_diag, params.r_diag)
     assert restored.target_velocity == params.target_velocity
-    assert restored.pitch_trim == params.pitch_trim
-    assert restored.pitch_trim_from_lut is params.pitch_trim_from_lut
     assert restored.pitch_lean_gain == params.pitch_lean_gain
-    assert restored.velocity_kp == params.velocity_kp
     assert restored.velocity_ki == params.velocity_ki
+    assert restored.position_kp == params.position_kp
+    assert restored.position_kd == params.position_kd
+    assert restored.position_velocity_limit == params.position_velocity_limit
     assert restored.yaw_damping == params.yaw_damping
     assert restored.yaw_ki == params.yaw_ki
     assert restored.target_yaw_rate == params.target_yaw_rate
