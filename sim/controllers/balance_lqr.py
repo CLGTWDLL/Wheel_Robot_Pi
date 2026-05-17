@@ -37,6 +37,33 @@ def compute_balance_lqr_gain(
     return gain
 
 
+def compute_balance_lqr_gain_5d(
+    model: Any,
+    data: Any,
+    q_diag: np.ndarray,
+    r_diag: np.ndarray,
+) -> np.ndarray:
+    """5 维平衡 LQR 增益。State: [pitch, pitch_rate, roll, roll_rate, wheel_vel]。
+
+    位置 wheel_pos 不在 LQR state 中——避免位置反馈在 stand 模式下与平衡
+    所需的轮子自由运动产生正反馈。位置漂移由外环处理（target_velocity
+    或可选的慢速 position anchor）。
+    """
+    q_diag = _validate_positive_diag(q_diag, (5,), "q_diag")
+    r_diag = _validate_positive_diag(r_diag, (2,), "r_diag")
+
+    a, b = _reduced_balance_system_5d(model, data)
+    q = np.diag(q_diag)
+    r = np.diag(r_diag)
+    try:
+        gain = solve_discrete_lqr(a, b, q, r)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError("failed to solve balance LQR") from exc
+    if gain.shape != (2, 5) or not np.all(np.isfinite(gain)):
+        raise ValueError("5D balance LQR gain must be finite shape (2, 5)")
+    return gain
+
+
 def _reduced_balance_system(model: Any, data: Any) -> tuple[np.ndarray, np.ndarray]:
     mujoco.mj_forward(model, data)
     pendulum_length = _com_height_above_wheels(model, data)
@@ -71,6 +98,44 @@ def _reduced_balance_system(model: Any, data: Any) -> tuple[np.ndarray, np.ndarr
 
     if a.shape != (6, 6) or b.shape != (6, 2) or not np.all(np.isfinite(a)) or not np.all(np.isfinite(b)):
         raise ValueError("reduced balance system must be finite with shapes (6, 6) and (6, 2)")
+    return a, b
+
+
+def _reduced_balance_system_5d(model: Any, data: Any) -> tuple[np.ndarray, np.ndarray]:
+    """5D 状态线性化系统。State: [pitch, pitch_rate, roll, roll_rate, wheel_vel]。
+
+    与 6D 的区别: 删掉 wheel_pos 行/列。wheel_pos 是 wheel_vel 的积分，
+    不在 LQR 反馈中。
+    """
+    mujoco.mj_forward(model, data)
+    pendulum_length = _com_height_above_wheels(model, data)
+    effective_mass = max(float(np.sum(model.body_mass)), 1e-6)
+    track_width = _track_width(model, data)
+    roll_inertia = _base_roll_inertia(model, data)
+    g = 9.81
+
+    control_dt = 0.002
+    dt = control_dt
+    b_vel = (1.0 / WHEEL_RADIUS) / effective_mass * dt
+
+    a = np.zeros((5, 5))
+    a[0, 0] = 1.0
+    a[0, 1] = dt
+    a[1, 0] = (g / pendulum_length) * dt
+    a[1, 1] = 1.0
+    a[2, 2] = 1.0
+    a[2, 3] = dt
+    a[3, 2] = (g / pendulum_length) * dt
+    a[3, 3] = 1.0
+    a[4, 4] = 1.0  # wheel_vel identity (was a[5,5] in 6D)
+
+    b = np.zeros((5, 2))
+    b[1, 0] = -(b_vel / pendulum_length)
+    b[4, 0] = b_vel  # was b[5, 0] in 6D
+    b[3, 1] = (track_width / 2.0) / (roll_inertia * pendulum_length) * dt
+
+    if a.shape != (5, 5) or b.shape != (5, 2) or not np.all(np.isfinite(a)) or not np.all(np.isfinite(b)):
+        raise ValueError("5D reduced balance system must be finite with shapes (5, 5) and (5, 2)")
     return a, b
 
 

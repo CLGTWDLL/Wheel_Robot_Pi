@@ -65,6 +65,31 @@ def balance_tangent_state_6d(model: object, data: object, state: SimState) -> np
     return tangent
 
 
+def balance_tangent_state_5d(model: object, data: object, state: SimState) -> np.ndarray:
+    """提取 LQR 平衡控制用的 5 维切线状态。
+
+    状态向量: [pitch, pitch_rate, roll, roll_rate, avg_wheel_vel]
+
+    与 6D 的区别: 不含 wheel_pos。LQR 内环只跟踪平衡相关的 5 维；
+    位置漂移由外环（target_velocity 或慢速 position anchor）处理，避免
+    位置锁在冲击/震荡瞬态与轮子运动形成正反馈。
+    """
+    four_d = balance_tangent_state(model, data, state)
+    tangent = np.array(
+        [
+            four_d[0],
+            four_d[1],
+            state.roll,
+            state.roll_rate,
+            four_d[3],
+        ],
+        dtype=float,
+    )
+    if tangent.shape != (5,) or not np.all(np.isfinite(tangent)):
+        raise ValueError("5D balance tangent state must be shape (5,) and finite")
+    return tangent
+
+
 def _side_key(joint_name: str) -> str:
     """将轮子关节名映射到 SimState 中的 left/right 键。"""
     if joint_name == MODEL_SEMANTICS.wheel_joints[0]:
