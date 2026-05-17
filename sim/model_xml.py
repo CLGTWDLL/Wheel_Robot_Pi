@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from math import atan2, cos, sin
 from pathlib import Path
 
 import mujoco
@@ -10,7 +12,18 @@ from sim.model_semantics import MODEL_SEMANTICS, WHEEL_RADIUS
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
 
 
-CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z", "cmd_height")
+CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z", "cmd_height", "cmd_jump")
+
+
+@dataclass(frozen=True)
+class SingleWheelTrapezoidTerrain:
+    side: str = "left"
+    height: float = 0.035
+    ramp_length: float = 0.20
+    platform_length: float = 0.25
+    width: float = 0.80
+    x_start: float = 0.22
+    thickness: float = 0.02
 
 
 def _urdf_to_mjcf(urdf_path: Path, output_dir: Path) -> Path:
@@ -36,8 +49,13 @@ def _urdf_to_mjcf(urdf_path: Path, output_dir: Path) -> Path:
     return mjcf_path
 
 
-def prepare_controlled_mujoco_xml(urdf_path: Path, cache_dir: Path | None = None) -> Path:
-    """Create a MuJoCo XML copy suitable for controlled simulation.
+def prepare_controlled_mujoco_xml(
+    urdf_path: Path,
+    cache_dir: Path | None = None,
+    terrain: str | None = None,
+    terrain_side: str = "left",
+) -> Path:
+    """Create a controlled MJCF model from the URDF simulation source.
 
     Accepts a URDF file, converts it to MJCF via MuJoCo's built-in
     converter, then applies post-processing (freejoint, actuators,
@@ -64,6 +82,7 @@ def prepare_controlled_mujoco_xml(urdf_path: Path, cache_dir: Path | None = None
 
     _make_mesh_paths_absolute(root, prepared_xml.parent)
     _ensure_world_environment(root)
+    _ensure_test_terrain(root, terrain, terrain_side)
     _ensure_root_freejoint(root)
     _ensure_command_slider_joints(root)
     _configure_geom_collisions(root)
@@ -120,7 +139,7 @@ def _ensure_world_environment(root: ET.Element) -> None:
 
     if worldbody.find("light") is None:
         ET.SubElement(worldbody, "light", {
-            "pos": "0 0 3", "dir": "0 0 -1", "directional": "true", "castshadow": "true",
+            "pos": "0 0 3", "dir": "0 0 -1", "directional": "true", "castshadow": "false",
         })
 
     existing_floor = next((g for g in worldbody.findall("geom") if g.get("name") == "floor"), None)
@@ -148,6 +167,90 @@ def _ensure_world_environment(root: ET.Element) -> None:
     # Use MuJoCo default gravity (0 0 -9.81). Only insert an <option> if absent.
     if root.find("option") is None:
         root.insert(0, ET.Element("option", {"gravity": "0 0 -9.81"}))
+
+
+def _ensure_test_terrain(root: ET.Element, terrain: str | None, terrain_side: str) -> None:
+    if terrain is None:
+        return
+    if terrain != "single_wheel_trapezoid":
+        raise ValueError(f"unsupported terrain: {terrain}")
+    _add_single_wheel_trapezoid(root, SingleWheelTrapezoidTerrain(side=terrain_side))
+
+
+def _add_single_wheel_trapezoid(root: ET.Element, config: SingleWheelTrapezoidTerrain) -> None:
+    if config.side not in {"left", "right"}:
+        raise ValueError(f"unsupported terrain side: {config.side}")
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        raise ValueError("MuJoCo XML is missing <worldbody>")
+    if worldbody.find("geom[@name='single_wheel_trapezoid_platform']") is not None:
+        return
+
+    height = float(config.height)
+    ramp_length = float(config.ramp_length)
+    platform_length = float(config.platform_length)
+    width = float(config.width)
+    thickness = float(config.thickness)
+    x_start = float(config.x_start if config.side == "left" else -config.x_start - 2.0 * ramp_length - platform_length)
+    if min(height, ramp_length, platform_length, width, thickness) <= 0.0:
+        raise ValueError("single-wheel trapezoid terrain dimensions must be positive")
+
+    ramp_span = (ramp_length * ramp_length + height * height) ** 0.5
+    angle = atan2(height, ramp_length)
+    cos_angle = cos(angle)
+    sin_angle = sin(angle)
+    ramp_z = 0.5 * height - 0.5 * thickness * cos_angle
+    y_pos = 0.0
+    y_half = 0.5 * width
+
+    _terrain_box(
+        worldbody,
+        name="single_wheel_trapezoid_ramp_up",
+        size=(0.5 * ramp_span, y_half, 0.5 * thickness),
+        pos=(x_start + 0.5 * ramp_length + 0.5 * thickness * sin_angle, y_pos, ramp_z),
+        euler=(0.0, -angle, 0.0),
+    )
+    platform_start = x_start + ramp_length
+    _terrain_box(
+        worldbody,
+        name="single_wheel_trapezoid_platform",
+        size=(0.5 * platform_length, y_half, 0.5 * height),
+        pos=(platform_start + 0.5 * platform_length, y_pos, 0.5 * height),
+    )
+    down_start = platform_start + platform_length
+    _terrain_box(
+        worldbody,
+        name="single_wheel_trapezoid_ramp_down",
+        size=(0.5 * ramp_span, y_half, 0.5 * thickness),
+        pos=(down_start + 0.5 * ramp_length - 0.5 * thickness * sin_angle, y_pos, ramp_z),
+        euler=(0.0, angle, 0.0),
+    )
+
+
+def _terrain_box(
+    worldbody: ET.Element,
+    *,
+    name: str,
+    size: tuple[float, float, float],
+    pos: tuple[float, float, float],
+    euler: tuple[float, float, float] | None = None,
+) -> None:
+    attrs = {
+        "name": name,
+        "type": "box",
+        "size": _format_float_triplet(size),
+        "pos": _format_float_triplet(pos),
+        "contype": "1",
+        "conaffinity": "1",
+        "rgba": "0.45 0.42 0.34 1",
+    }
+    if euler is not None:
+        attrs["euler"] = _format_float_triplet(euler)
+    ET.SubElement(worldbody, "geom", attrs)
+
+
+def _format_float_triplet(values: tuple[float, float, float]) -> str:
+    return " ".join(f"{float(value):.9g}" for value in values)
 
 
 def _ensure_root_freejoint(root: ET.Element) -> None:
@@ -186,6 +289,7 @@ def _ensure_command_slider_joints(root: ET.Element) -> None:
     ET.SubElement(body, "joint", {"name": CMD_SLIDER_NAMES[0], "type": "hinge", "axis": "1 0 0", "damping": "0"})
     ET.SubElement(body, "joint", {"name": CMD_SLIDER_NAMES[1], "type": "hinge", "axis": "0 1 0", "damping": "0"})
     ET.SubElement(body, "joint", {"name": CMD_SLIDER_NAMES[2], "type": "hinge", "axis": "0 0 1", "damping": "0"})
+    ET.SubElement(body, "joint", {"name": CMD_SLIDER_NAMES[3], "type": "hinge", "axis": "1 1 0", "damping": "0"})
 
 
 def _configure_geom_collisions(root: ET.Element) -> None:
@@ -328,7 +432,11 @@ def _replace_actuators(root: ET.Element) -> None:
 
     actuator = ET.Element("actuator")
     for joint_name in MODEL_SEMANTICS.wheel_joints + MODEL_SEMANTICS.leg_motor_joints:
-        ctrlrange = "-1.0 1.0" if joint_name in MODEL_SEMANTICS.wheel_joints else "-5.0 5.0"
+        # Torque limits from real motor specs:
+        #   wheels: DM-H6215 rated 1.0 Nm (peak 2.0 Nm)
+        #   legs:   DM-J4310-2EC peak 12.5 Nm; controller soft-limits
+        #           non-EXTEND phases to rated 3.5 Nm.
+        ctrlrange = "-1.0 1.0" if joint_name in MODEL_SEMANTICS.wheel_joints else "-12.5 12.5"
         ET.SubElement(
             actuator,
             "motor",
@@ -343,7 +451,11 @@ def _replace_actuators(root: ET.Element) -> None:
     # cmd_height range matches the LUT's reachable h interval (see
     # sim/controllers/leg_height_lut.json). Slightly inset so the LUT inverse
     # interpolation never has to clamp.
-    for name, ctrlrange in zip(CMD_SLIDER_NAMES, ("-1.0 1.0", "-3.0 3.0", "0.118 0.148")):
+    # 2026-05-16: upper bound dropped from 0.148 → 0.142 because the current
+    # 2.2 kg LQR/VMC tune oscillates above h=0.142 (LUT d²h/dθ² flips sign in
+    # [0.144, 0.149] and LQR linearization point shifts). Reverting to 0.148
+    # without re-tuning will let the robot fall. See docs/retuning_guide_2026-05-16.md.
+    for name, ctrlrange in zip(CMD_SLIDER_NAMES, ("-1.0 1.0", "-3.0 3.0", "0.118 0.142", "0 1")):
         ET.SubElement(
             actuator,
             "motor",
@@ -448,7 +560,7 @@ _STANDING_KEYFRAME_QPOS = (
     "0.752 0.980 0 "                      # right: motor, link1 passive, wheel
     "0.752 0.980 0 "                      # left: motor, link1 passive, wheel
     "0.720 0.720 "                        # base passive joints (link3 right/left)
-    "0 0 0"                               # cmd_linear_x, cmd_angular_z, cmd_height
+    "0 0 0 0"                             # cmd_linear_x, cmd_angular_z, cmd_height, cmd_jump
 )
 
 

@@ -77,7 +77,7 @@ def main():
         "size": "0 0 1", "material": "grid"
     })
     ET.SubElement(worldbody, "light", {
-        "pos": "0 0 3", "dir": "0 0 -1", "directional": "true", "castshadow": "true"
+        "pos": "0 0 3", "dir": "0 0 -1", "directional": "true", "castshadow": "false"
     })
 
     # Visual settings

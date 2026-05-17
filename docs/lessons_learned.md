@@ -5,12 +5,12 @@
 **原问题**: 仿真中机器人腿部在 0.5s 内对称折叠，机体从初始高度 0.06m 垂直下沉穿过地面。
 
 **根因**: 三个问题叠加：
-1. `ctrlrange=[-0.5, 0.5]` 远低于实际电机能力（DM4310 额定 3.5Nm，DMH6215 T_MAX=10Nm）
+1. `ctrlrange=[-0.5, 0.5]` 远低于实际电机能力（DM4310 额定 3.5Nm/峰值 12.5Nm，DMH6215 额定 1Nm/峰值 2Nm）
 2. VMC 纯 PD 无重力前馈——在目标高度时 height_error=0 导致零力矩输出
 3. **base 和 link body 之间存在大量自碰撞**（collision_base_main 与 collision_link2_left/right 穿透 13mm），产生 26 个接触点，干扰正常力传递
 
 **解决方案**:
-1. 根据电机手册将 ctrlrange 分离：轮子 [-3.0, 3.0]，腿 [-3.5, 3.5]
+1. 根据电机手册将 ctrlrange 分离：轮子 [-1.0, 1.0]（DMH6215 额定 1Nm），腿 [-3.5, 3.5]（DM4310 额定 3.5Nm）
 2. VMC 添加 `qfrc_bias` 重力/科氏力补偿
 3. **contype/conaffinity 位掩码分组**：base/link 碰撞代理 contype=2, conaffinity=1，轮子 contype=1, conaffinity=3。同组 contype=2 不互碰
 4. 200 轮自动优化 LQR/VMC 参数：kp=47, kd=11.3, Q=[1118,210,9.4,40.6], R=[0.86,4.57]
@@ -374,8 +374,6 @@
 
 **验证**: stand keyframe 下 wheel body `xipos.z` 与 wheel collision proxy `geom_xpos.z` 一致，误差约 `1e-8m`，因此当前实现使用 wheel body `xipos`。
 
-**调参结果**: `cmd_height` 连续扫描可站范围收窄到 `0.04..0.16`；当前 3.5Nm 腿电机上限下，`pos_z` 实测跟随约 `1cm` 到 `2cm`，未达到 `5cm`。高端会进入腿部力矩饱和，drive/jump 参数未在本轮调整。
-
 ### 2026-05-13 (P3): LQR 扩展为 6D 并纳入 base roll
 
 **变更**: LQR 状态从 `[pitch, pitch_rate, wheel_pos, wheel_vel]` 扩为 `[pitch, pitch_rate, roll, roll_rate, wheel_pos, wheel_vel]`。LQR 输出改为两个虚拟量: `forward_wheel` 和 `roll_diff_leg`。Yaw PI 仍只作用于轮子差速，VMC 仍只作用于腿部同向高度控制。
@@ -384,7 +382,7 @@
 
 **符号**: 短时仿真验证显示“左腿 +1Nm、右腿 -1Nm”会让 `roll` 朝负方向变化。因此虚拟 `roll_diff_leg > 0` 映射为左腿负、右腿正，并用测试固定。
 
-**结果**: `verify_cmd_height_tracking.py` 中 `max_abs_roll` 约 `0.0002rad`，roll 已进入 LQR 控制。高度跟随仍受 3.5Nm 腿电机限幅影响，`pos_z_span` 约 `0.008m`，未达到 5cm。
+**结果**: `verify_cmd_height_tracking.py` 中 `max_abs_roll` 约 `0.0002rad`，roll 已进入 LQR 控制。
 
 ## 2026-05-05: 轮腿机器人对称性与控制问题排查
 1. **坐标系镜像的轴向量（Axial Vector）处理**：

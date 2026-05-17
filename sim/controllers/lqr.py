@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import mujoco
 import numpy as np
+from scipy.linalg import solve_discrete_are
 
 from sim.state import SimState
 
@@ -55,15 +56,6 @@ def solve_discrete_lqr(
     b: np.ndarray,
     q: np.ndarray,
     r: np.ndarray,
-    *,
-    max_iterations: int = 500,
-    tolerance: float = 1e-10,
 ) -> np.ndarray:
-    p = q.copy()
-    for _ in range(max_iterations):
-        next_p = a.T @ p @ a - a.T @ p @ b @ np.linalg.solve(r + b.T @ p @ b, b.T @ p @ a) + q
-        if np.linalg.norm(next_p - p, ord="fro") < tolerance:
-            p = next_p
-            break
-        p = next_p
+    p = solve_discrete_are(a, b, q, r)
     return np.linalg.solve(r + b.T @ p @ b, b.T @ p @ a)

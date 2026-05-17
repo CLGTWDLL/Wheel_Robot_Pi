@@ -11,7 +11,7 @@ import numpy as np
 
 from sim.metrics import RolloutMetrics
 from sim.model_xml import prepare_controlled_mujoco_xml
-from sim.state import SimState, extract_sim_state
+from sim.state import SimState, extract_sim_state, model_addresses
 
 
 Controller = Callable[[Any, Any, SimState], np.ndarray]
@@ -45,7 +45,11 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
     model_path = prepare_controlled_mujoco_xml(xml_path, cache_dir=config.cache_dir)
     model = mujoco.MjModel.from_xml_path(str(model_path))
     data = mujoco.MjData(model)
+    stand_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "stand")
+    if stand_id >= 0:
+        mujoco.mj_resetDataKeyframe(model, data, stand_id)
     mujoco.mj_forward(model, data)
+    _apply_rollout_scenario_initial_state(model, data, config.scenario)
 
     initial_state = extract_sim_state(model, data)
     initial_base_position = initial_state.base_position.copy()
@@ -126,12 +130,16 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
         contact_count = max(contact_count, int(state.contact_count))
 
         # Early termination: Fall detection (前 1s 为启动瞬态免疫期)
-        if time_elapsed > 1.0 and state.base_position[2] < initial_base_position[2] - config.fall_height_drop:
+        if (
+            config.scenario != "fall_recover"
+            and time_elapsed > 1.0
+            and state.base_position[2] < initial_base_position[2] - config.fall_height_drop
+        ):
             failure_reason = "fell"
             break
 
         # Early termination: Excessive pitch (loss of balance)
-        if abs(float(state.pitch)) > 1.5:
+        if config.scenario != "fall_recover" and abs(float(state.pitch)) > 1.5:
             failure_reason = "excessive_pitch"
             break
 
@@ -177,6 +185,20 @@ def run_rollout(xml_path: Path, config: RolloutConfig, controller: Controller = 
         last_control=last_control,
         failure_reason=failure_reason,
     )
+
+
+def _apply_rollout_scenario_initial_state(model: Any, data: Any, scenario: str) -> None:
+    if scenario != "fall_recover":
+        return
+    addresses = model_addresses(model)
+    root_qpos = addresses.root_qpos
+    pitch_angle = 1.2
+    data.qpos[root_qpos + 3 : root_qpos + 7] = np.array(
+        [np.cos(-pitch_angle / 2.0), np.sin(-pitch_angle / 2.0), 0.0, 0.0],
+        dtype=float,
+    )
+    data.qvel[addresses.root_qvel : addresses.root_qvel + 6] = 0.0
+    mujoco.mj_forward(model, data)
 
 
 def _clip_control(model: Any, control: np.ndarray) -> np.ndarray:

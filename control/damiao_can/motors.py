@@ -26,8 +26,12 @@ class MotorConfig(DeviceConfig):
 MOTORS: tuple[MotorConfig, ...] = (
     MotorConfig(name="dm4310_left", can_id=0x02, master_id=0x12, mode="mit", v_max=30.0),
     MotorConfig(name="dm4310_right", can_id=0x03, master_id=0x13, mode="mit", v_max=30.0),
-    MotorConfig(name="dmh6215_left", can_id=0x04, master_id=0x14, mode="velocity", v_max=45.0),
-    MotorConfig(name="dmh6215_right", can_id=0x05, master_id=0x15, mode="velocity", v_max=45.0),
+    # 2026-05-16: DMH6215 切换到 MIT 控制模式（之前是 velocity）。
+    # 物理约束：额定 1 N·m / 峰值 2 N·m / 空载最高 33.5 rad/s。
+    # p_max/v_max/t_max 保留 CAN 协议默认映射范围（实机电机寄存器配置一致）；
+    # 真实物理上限由 control/damiao_can/safety.py 的 MAX_* 常量约束。
+    MotorConfig(name="dmh6215_left", can_id=0x04, master_id=0x14, mode="mit", v_max=45.0),
+    MotorConfig(name="dmh6215_right", can_id=0x05, master_id=0x15, mode="mit", v_max=45.0),
 )
 
 DEVICES: tuple[DeviceConfig, ...] = (

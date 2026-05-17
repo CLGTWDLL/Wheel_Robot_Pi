@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -45,11 +46,9 @@ class CombinedParams:
     yaw_ki: float = 0.0
     target_yaw_rate: float = 0.0
     fixed_height: bool = True
-    lqr_height_bin_size: float = 0.03
-    height_support_enabled: bool = False
-    height_support_target: float | None = None
-    height_support_kp: float = 240.0
-    height_support_kd: float = 28.0
+    lqr_height_bin_size: float = 0.02
+    flight_wheel_q: float = 1.0
+    ff_gain: float = 1.0
 
 
 class CombinedController:
@@ -64,8 +63,8 @@ class CombinedController:
         self._prev_target_velocity: float = params.target_velocity
         self._lqr_gain_cache: dict[tuple[int, int], np.ndarray] = {}
         self._active_lqr_gain_key: tuple[int, int] | None = None
-        self._height_support_target: float | None = params.height_support_target
         self._height_wheel_velocity_ff: float = 0.0
+        self._last_phase = JumpPhase.STAND
 
     @property
     def lqr_controller(self) -> LqrController | None:
@@ -119,27 +118,6 @@ class CombinedController:
         self._lqr_controller.gain = gain
         self._active_lqr_gain_key = gain_key
 
-    def _apply_height_support(self, model: Any, data: Any, state: SimState) -> None:
-        base_id = body_id(model, "base_link")
-        if not self.params.height_support_enabled:
-            data.xfrc_applied[base_id, :] = 0.0
-            return
-        if self._height_support_target is None:
-            self._height_support_target = float(state.base_position[2])
-        height_error = self._height_support_target - float(state.base_position[2])
-        vertical_velocity = float(state.base_linear_velocity[2])
-        support_mass = float(np.sum(model.body_mass))
-        gravity = abs(float(model.opt.gravity[2]))
-        support_force = np.clip(
-            support_mass * gravity
-            + self.params.height_support_kp * height_error
-            - self.params.height_support_kd * vertical_velocity,
-            -1000.0,
-            1000.0,
-        )
-        data.xfrc_applied[base_id, :] = 0.0
-        data.xfrc_applied[base_id, 2] = support_force
-
     def _average_leg_height_and_wheel_mid_z(self, model: Any, data: Any) -> tuple[float, float]:
         wheel_ids = [
             body_id(model, geometry.wheel_body)
@@ -165,9 +143,9 @@ class CombinedController:
         right_rate = self.vmc_controller.last_target_motor_rate.get("right", 0.0)
         theta_rate_mean = 0.5 * (left_rate + right_rate)
         dh_dt_cmd = self.params.vmc.lut.height_dtheta(current_leg_height) * theta_rate_mean
-        return self.params.vmc.lut.dy_wheel_dh(current_leg_height) * dh_dt_cmd
+        return self.params.ff_gain * self.params.vmc.lut.dy_wheel_dh(current_leg_height) * dh_dt_cmd
 
-    def _update_lqr_target(self, model: Any, data: Any, state: SimState, dt: float) -> None:
+    def _update_lqr_target(self, model: Any, data: Any, state: SimState, dt: float, phase: JumpPhase) -> None:
         """每步更新 LQR 目标: 速度跟踪 + pitch 前倾补偿。"""
         if self._lqr_controller is None:
             return
@@ -175,7 +153,15 @@ class CombinedController:
         current_wheel_pos = float(current_tangent[4])
         current_wheel_vel = float(current_tangent[5])
         current_leg_height, _wheel_mid_z = self._average_leg_height_and_wheel_mid_z(model, data)
-        velocity_target = self.params.target_velocity + self._height_wheel_velocity_ff
+        release_wheel_target = phase == JumpPhase.FLIGHT
+        # LAND/RECOVER 阶段冲击瞬态，宽容轮位漂移：让 target[4] 跟随当前轮位，
+        # 避免起跳期间累积的位置误差经强位置反馈翻译成大幅 wheel torque 把机器人向前栽。
+        reset_wheel_pos_target = phase in (
+            JumpPhase.FLIGHT,
+            JumpPhase.LAND,
+            JumpPhase.RECOVER,
+        )
+        velocity_target = 0.0 if release_wheel_target else self.params.target_velocity + self._height_wheel_velocity_ff
         velocity_error = velocity_target - current_wheel_vel
 
         # 积分只在没有饱和时累加，防止积分饱和 (anti-windup)
@@ -196,14 +182,40 @@ class CombinedController:
 
         # 运动模式: 同步目标位置到当前位置，避免位置环"橡皮筋"。
         # 站立模式 (target_velocity≈0): 保持初始目标位置, 启用 LQR 位置闭环消除漂移。
-        if abs(velocity_target) > 1e-4:
+        # 落地瞬态 (LAND/RECOVER): 同步当前位置，避免冲击位移触发强位置反馈把机器人栽倒。
+        # 站立但仍带有残余角速度 (|wheel_vel|>0.1)：跟随当前轮位，防止位置锁与轮子
+        # 跟随 CoM 的必要运动形成正反馈把身体反向栽倒（2026-05-17 DARE LQR 后症状）。
+        if (
+            reset_wheel_pos_target
+            or abs(velocity_target) > 1e-4
+            or abs(current_wheel_vel) > 0.1
+        ):
             self._lqr_controller.target[4] = current_wheel_pos
-        if abs(self._height_wheel_velocity_ff) > 1e-6:
+        if not reset_wheel_pos_target and abs(self._height_wheel_velocity_ff) > 1e-6:
             self._lqr_controller.target[4] += self._height_wheel_velocity_ff * dt
 
         self._lqr_controller.target[5] = velocity_target
 
         self._prev_target_velocity = self.params.target_velocity
+
+    @contextmanager
+    def _flight_lqr_weight_schedule(self, model: Any, data: Any, phase: JumpPhase):
+        if self._lqr_controller is None or phase != JumpPhase.FLIGHT:
+            yield
+            return
+        original_gain = self._lqr_controller.gain
+        original_q_diag = self.params.q_diag
+        scheduled_q = original_q_diag.copy()
+        scheduled_q[4] = self.params.flight_wheel_q
+        scheduled_q[5] = self.params.flight_wheel_q
+        try:
+            if not np.allclose(scheduled_q, original_q_diag):
+                self.params.q_diag = scheduled_q
+                self._lqr_controller.gain = self._compute_lqr_gain(model, data)
+            yield
+        finally:
+            self.params.q_diag = original_q_diag
+            self._lqr_controller.gain = original_gain
 
     def _compute_lqr_virtual_outputs(self, lqr_control: np.ndarray) -> tuple[float, float]:
         """返回 LQR 虚拟输出: (forward_wheel, roll_diff_leg)。"""
@@ -218,6 +230,13 @@ class CombinedController:
         self._yaw_integral += yaw_error * dt
         self._yaw_integral = np.clip(self._yaw_integral, -5.0, 5.0)
         return self.params.yaw_damping * yaw_error + self.params.yaw_ki * self._yaw_integral
+
+    def _reset_balance_state(self) -> None:
+        self._velocity_integral = 0.0
+        self._yaw_integral = 0.0
+        self._height_wheel_velocity_ff = 0.0
+        self._lqr_controller = None
+        self._active_lqr_gain_key = None
 
     def _allocate_wheel_control(self, model: Any, forward_torque: float, yaw_torque: float, addresses: Any) -> np.ndarray:
         """Map virtual forward/yaw wheel torques to physical wheel actuator signs."""
@@ -258,42 +277,61 @@ class CombinedController:
         for joint_name in MODEL_SEMANTICS.wheel_joints + MODEL_SEMANTICS.leg_motor_joints:
             act_idx = addresses.actuators[joint_name]
             clipped[act_idx] = np.clip(control[act_idx], model.actuator_ctrlrange[act_idx, 0], model.actuator_ctrlrange[act_idx, 1])
+            phase_machine = self.vmc_controller.phase_machine
+            phase = phase_machine.phase if phase_machine is not None else JumpPhase.STAND
+            if joint_name in MODEL_SEMANTICS.leg_motor_joints and phase in (
+                JumpPhase.STAND,
+                JumpPhase.CROUCH,
+                JumpPhase.LAND,
+                JumpPhase.RECOVER,
+            ):
+                clipped[act_idx] = np.clip(clipped[act_idx], -3.5, 3.5)
         
         if not np.all(np.isfinite(clipped)):
             raise ValueError("combined control must be finite")
         return clipped
 
     def __call__(self, model: Any, data: Any, state: SimState) -> np.ndarray:
+        dt = float(model.opt.timestep)
+        addresses = model_addresses(model)
+        vmc_control = self.vmc_controller(model, data, state)
+
+        phase = self.vmc_controller.phase_machine.phase if self.vmc_controller.phase_machine is not None else JumpPhase.STAND
+
+        if phase == JumpPhase.FALLEN:
+            self._reset_balance_state()
+            self._last_phase = phase
+            return np.zeros(model.nu)
+
+        # 起跳入相清零积分。Stand 模式下两个积分在数秒内会缓慢漂移，跨跳积累
+        # 会让 pitch_lean 目标偏移，前后两次跳跃的起跳条件不一致。CROUCH 起点强制
+        # 同步两个积分，保证每次跳跃从一致的内部状态开始。
+        if phase == JumpPhase.CROUCH and self._last_phase != JumpPhase.CROUCH:
+            self._velocity_integral = 0.0
+            self._yaw_integral = 0.0
+
         if self._lqr_controller is None:
             self._initialize_lqr(model, data, state)
         if self._lqr_controller is None:
             raise ValueError("failed to initialize LQR controller")
 
-        dt = float(model.opt.timestep)
-        self._apply_height_support(model, data, state)
         if not self.params.fixed_height:
             self._ensure_lqr_height_bin(model, data, state)
 
-        addresses = model_addresses(model)
-        vmc_control = self.vmc_controller(model, data, state)
-
-        phase = self.vmc_controller.phase_machine.phase if self.vmc_controller.phase_machine is not None else JumpPhase.STAND
         current_leg_height, _wheel_mid_z = self._average_leg_height_and_wheel_mid_z(model, data)
         self._height_wheel_velocity_ff = self._height_wheel_velocity_feedforward(current_leg_height)
-        if phase in (JumpPhase.FLIGHT, JumpPhase.LAND, JumpPhase.FAIL):
+        if phase in (JumpPhase.FLIGHT, JumpPhase.LAND):
             self._height_wheel_velocity_ff = 0.0
 
-        self._update_lqr_target(model, data, state, dt)
+        self._update_lqr_target(model, data, state, dt, phase)
 
         self._lqr_controller.feedforward = np.zeros(2)
-        lqr_control = self._lqr_controller(model, data, state)
-        
-        if phase in (JumpPhase.FLIGHT, JumpPhase.LAND, JumpPhase.FAIL):
-            avg_forward = 0.0
-            roll_torque = 0.0
-            yaw_correction = 0.0
-        else:
-            avg_forward, roll_torque = self._compute_lqr_virtual_outputs(lqr_control)
-            yaw_correction = self._compute_yaw_correction(state, dt)
+        with self._flight_lqr_weight_schedule(model, data, phase):
+            lqr_control = self._lqr_controller(model, data, state)
 
-        return self._assemble_and_clip_control(model, avg_forward, yaw_correction, roll_torque, vmc_control, addresses)
+        avg_forward, roll_torque = self._compute_lqr_virtual_outputs(lqr_control)
+        yaw_correction = self._compute_yaw_correction(state, dt)
+
+        control = self._assemble_and_clip_control(model, avg_forward, yaw_correction, roll_torque, vmc_control, addresses)
+        self._last_phase = phase
+        return control

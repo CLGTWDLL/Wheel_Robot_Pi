@@ -71,8 +71,9 @@ def validate_pair_targets(dm4310_left: MotorConfig, dmh6215_left: MotorConfig) -
         raise ValueError("pair wheel target must be dmh6215_left")
     if dm4310_left.mode != "mit":
         raise ValueError("dm4310_left must be MIT mode")
-    if dmh6215_left.mode != "velocity":
-        raise ValueError("dmh6215_left must be velocity mode")
+    # 2026-05-16: DMH6215 已切换到 MIT。配合 motors.py。
+    if dmh6215_left.mode != "mit":
+        raise ValueError("dmh6215_left must be MIT mode")
 
 
 def validate_pair_mit_velocity(velocity: float) -> float:

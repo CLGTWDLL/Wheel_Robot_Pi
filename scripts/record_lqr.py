@@ -1,4 +1,5 @@
 import argparse
+from dataclasses import replace
 from pathlib import Path
 import numpy as np
 import mujoco
@@ -24,10 +25,7 @@ def main():
     args = parser.parse_args()
 
     # Modify parameters based on arguments
-    params = STAND_PARAMS
-    params.height_support_enabled = True
-    
-
+    params = replace(STAND_PARAMS, vmc=replace(STAND_PARAMS.vmc))
 
     params.q_diag = np.array([
         args.q_pitch,

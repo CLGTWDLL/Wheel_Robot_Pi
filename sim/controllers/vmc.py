@@ -50,10 +50,16 @@ class VmcParams:
     kp_motor: float
     kd_motor: float
     crouch_offset: float = -0.03
+    crouch_target_height: float = 0.09
+    crouch_duration: float = 0.20
     extend_offset: float = 0.05
     landing_damping: float = 1.0
+    land_kp_scale: float = 0.5
+    land_kd_scale: float = 2.5
     gravity_compensation_scale: float = 1.0
     max_height_rate: float = 0.1
+    jump_extend_feedforward: float = 0.0
+    jump_extend_feedforward_duration: float = 0.0
     lut: LegHeightLUT = field(default_factory=LegHeightLUT.from_json)
 
 
@@ -68,6 +74,7 @@ class VmcController:
         self._height_jacobian_rows_cache: dict[str, np.ndarray] | None = None
         self._motor_jacobian_step_count: int = 0
         self._height_filtered: float | None = None
+        self._crouch_start_height: float | None = None
         self._target_motor_angle_prev: dict[str, float] = {}
         self.last_target_motor_rate: dict[str, float] = {side: 0.0 for side in LEG_CLOSED_LOOP}
 
@@ -98,10 +105,16 @@ class VmcController:
             self.params.kp_motor,
             self.params.kd_motor,
             self.params.crouch_offset,
+            self.params.crouch_target_height,
+            self.params.crouch_duration,
             self.params.extend_offset,
             self.params.landing_damping,
+            self.params.land_kp_scale,
+            self.params.land_kd_scale,
             self.params.gravity_compensation_scale,
             self.params.max_height_rate,
+            self.params.jump_extend_feedforward,
+            self.params.jump_extend_feedforward_duration,
         ])
         if not np.all(np.isfinite(params_values)):
             raise ValueError("VMC params must be finite")
@@ -109,26 +122,45 @@ class VmcController:
             raise ValueError("VMC state must be finite")
 
         phase = self.phase_machine.phase if self.phase_machine is not None else JumpPhase.STAND
+        current_leg_height = _average_leg_height(model, data)
         if self.phase_machine is not None and update_phase:
             self.phase_machine.update(
                 dt=float(model.opt.timestep),
-                base_height=float(state.base_position[2]),
-                vertical_velocity=float(state.base_linear_velocity[2]),
+                leg_height=current_leg_height,
+                vz=float(state.base_linear_velocity[2]),
                 contact_count=state.contact_count,
+                pitch=float(state.pitch),
             )
             phase = self.phase_machine.phase
 
         target_height = self._filtered_nominal_height(float(model.opt.timestep))
+        kp_motor = self.params.kp_motor
         kd_motor = self.params.kd_motor
         if phase == JumpPhase.CROUCH:
-            target_height += self.params.crouch_offset
+            if self._crouch_start_height is None:
+                self._crouch_start_height = current_leg_height
+            duration = max(float(self.params.crouch_duration), float(model.opt.timestep))
+            progress = float(np.clip(self.phase_machine.time_in_phase / duration if self.phase_machine else 1.0, 0.0, 1.0))
+            blend = progress**3 * (10.0 - 15.0 * progress + 6.0 * progress * progress)
+            target_height = (1.0 - blend) * self._crouch_start_height + blend * self.params.crouch_target_height
         elif phase == JumpPhase.EXTEND:
+            self._crouch_start_height = None
             target_height += self.params.extend_offset
+        elif phase == JumpPhase.FLIGHT:
+            # 飞行中预收腿到 crouch 高度：缩短 pendulum length，落地冲击转化的
+            # pitch 力矩与 L 成正比；同时给 LAND 阶段留出腿伸展行程吸收冲击。
+            self._crouch_start_height = None
+            target_height = self.params.crouch_target_height
         elif phase == JumpPhase.LAND:
-            kd_motor += self.params.landing_damping
-        elif phase == JumpPhase.FAIL:
+            self._crouch_start_height = None
+            kp_motor *= self.params.land_kp_scale
+            kd_motor = kd_motor * self.params.land_kd_scale + self.params.landing_damping
+        elif phase == JumpPhase.FALLEN:
+            self._crouch_start_height = None
             self.last_target_motor_rate = {side: 0.0 for side in LEG_CLOSED_LOOP}
             return np.zeros(model.nu)
+        else:
+            self._crouch_start_height = None
 
         control = np.zeros(model.nu)
         addresses = model_addresses(model)
@@ -162,10 +194,7 @@ class VmcController:
 
             theta_current = float(data.qpos[motor_qpos_idx])
             theta_rate = float(data.qvel[motor_qvel_idx])
-            pid_torque = (
-                self.params.kp_motor * (target_motor_angle - theta_current)
-                - kd_motor * theta_rate
-            )
+            pid_torque = kp_motor * (target_motor_angle - theta_current) - kd_motor * theta_rate
 
             if phase == JumpPhase.FLIGHT:
                 gravity_torque = 0.0
@@ -178,8 +207,16 @@ class VmcController:
                     * self.params.gravity_compensation_scale
                 )
 
-            control[act_idx] = gravity_torque + pid_torque
+            if phase == JumpPhase.EXTEND:
+                control[act_idx] = gravity_torque + self.params.jump_extend_feedforward
+            else:
+                control[act_idx] = gravity_torque + pid_torque
+
         clipped = np.clip(control, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
+        if phase in (JumpPhase.STAND, JumpPhase.CROUCH, JumpPhase.LAND, JumpPhase.RECOVER):
+            for geometry in LEG_CLOSED_LOOP.values():
+                act_idx = addresses.actuators[geometry.motor_joint]
+                clipped[act_idx] = float(np.clip(clipped[act_idx], -3.5, 3.5))
         if not np.all(np.isfinite(clipped)):
             raise ValueError("VMC control must be finite")
         return clipped

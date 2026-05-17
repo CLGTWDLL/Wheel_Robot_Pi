@@ -30,7 +30,7 @@ def main():
 
     # Modify parameters based on arguments
     from dataclasses import replace
-    params = replace(STAND_PARAMS, height_support_enabled=False)
+    params = replace(STAND_PARAMS)
     params.pitch_trim = args.pitch_trim
 
 

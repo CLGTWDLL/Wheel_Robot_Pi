@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .motors import get_motor
-from .protocol import CanFrame, disable_frame, enable_frame, mit_frame, torque_frame, velocity_frame
+from .protocol import CanFrame, disable_frame, enable_frame, mit_frame, torque_frame
 
 
 def _safety() -> Any:
@@ -35,8 +35,6 @@ def group_zero_frames() -> tuple[CanFrame, ...]:
             frames.append(mit_frame(motor))
         elif motor.mode == "torque":
             frames.append(torque_frame(motor, 0.0))
-        elif motor.mode == "velocity":
-            frames.append(velocity_frame(motor, velocity=0.0))
         else:
             raise ValueError(f"unsupported motor mode: {motor.mode}")
     return tuple(frames)
@@ -47,7 +45,8 @@ def pair_zero_frames() -> tuple[CanFrame, CanFrame]:
     wheel_motor = get_motor(PAIR_WHEEL_NAME)
     _safety().validate_pair_targets(mit_motor, wheel_motor)
     _safety().validate_mit_parameters(mit_motor)
-    return (mit_frame(mit_motor), velocity_frame(wheel_motor, velocity=0.0))
+    _safety().validate_mit_parameters(wheel_motor)
+    return (mit_frame(mit_motor), mit_frame(wheel_motor))
 
 
 def send_frames(bus: Any, frames: tuple[CanFrame, ...] | list[CanFrame]) -> None:
@@ -104,8 +103,8 @@ def run_group_conservative_test(
     cycle_frames = [
         mit_frame(get_motor("dm4310_left")),
         mit_frame(get_motor("dm4310_right")),
-        velocity_frame(get_motor("dmh6215_left"), velocity=0.0),
-        velocity_frame(get_motor("dmh6215_right"), velocity=0.0),
+        mit_frame(get_motor("dmh6215_left")),
+        mit_frame(get_motor("dmh6215_right")),
     ]
     try:
         send_frames(bus, group_zero_frames())
@@ -133,9 +132,10 @@ def run_pair_conservative_spin(
     kd = _safety().validate_pair_mit_kd(DEFAULT_PAIR_MIT_KD)
     duration = _safety().validate_nonzero_duration(duration)
     period = _safety().validate_period(period)
+    # 2026-05-16: DMH6215 也走 MIT 模式。用 kp=0、kd 阻尼跟踪 v_des 实现保守 spin。
     cycle_frames = [
         mit_frame(mit_motor, position=0.0, velocity=velocity, kp=0.0, kd=kd, torque=torque),
-        velocity_frame(wheel_motor, velocity=wheel_velocity),
+        mit_frame(wheel_motor, position=0.0, velocity=wheel_velocity, kp=0.0, kd=kd, torque=0.0),
     ]
     try:
         send_frames(bus, pair_zero_frames())

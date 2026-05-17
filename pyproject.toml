@@ -6,11 +6,13 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "gym>=0.26.2",
+    "hidapi>=0.15.0",
     "imageio>=2.37.3",
     "imageio-ffmpeg>=0.6.0",
     "matplotlib>=3.10.9",
     "mujoco>=3.7.0",
     "optuna>=4.8.0",
+    "pyobjc-framework-GameController>=10.0",
     "pyserial>=3.5",
     "scipy>=1.17.1",
 ]

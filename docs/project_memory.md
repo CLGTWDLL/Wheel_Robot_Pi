@@ -132,8 +132,9 @@ STAND → CROUCH → EXTEND → FLIGHT → LAND → RECOVER → STAND (+ FAIL �
 | 4 | act_robot_base_link_r4 | 右腿电机1 | VMC |
 | 5 | act_robot_base_link_r9 | 右腿电机2 | VMC |
 
-轮子 `ctrlrange=[-3.0, 3.0]`（基于 DMH6215 T_MAX=10Nm，保守取值）。
-腿 `ctrlrange=[-3.5, 3.5]`（基于 DM4310 额定 3.5Nm）。
+轮子 `ctrlrange=[-1.0, 1.0]`（基于 DMH6215 额定扭矩 1Nm，峰值 2Nm）。
+腿 `ctrlrange=[-3.5, 3.5]`（基于 DM4310 额定扭矩 3.5Nm，峰值 12.5Nm）。
+**注意**：CAN 协议中的 `T_MAX` 仅是浮点-定点编码的映射范围，不是物理扭矩上限。早期文档把 6215 的 `T_MAX=10` 误读为可输出 10Nm，实际峰值仅 2Nm。详见 `AGENTS.md` 电机参数章节。
 
 ## VMC 控制方式
 
@@ -150,8 +151,8 @@ qfrc_bias 在只有 2 个腿电机的闭链五连杆中产生过大的耦合力�
 | DM-IMU | 0x01 | 0x11 | 读取 |
 | DM4310 左 | 0x02 | 0x12 | MIT 控制模式 |
 | DM4310 右 | 0x03 | 0x13 | MIT 控制模式 |
-| DMH6215 左 | 0x04 | 0x14 | 速度控制模式 |
-| DMH6215 右 | 0x05 | 0x15 | 速度控制模式 |
+| DMH6215 左 | 0x04 | 0x14 | MIT 控制模式 |
+| DMH6215 右 | 0x05 | 0x15 | MIT 控制模式 |
 
 ## 仿真日志系统
 - **位置**: 所有的日志数据统一保存在项目根目录的 `logs/` 目录下。
