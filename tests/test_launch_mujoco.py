@@ -7,7 +7,7 @@ import mujoco
 import numpy as np
 
 from sim.controllers.default_params import STAND_PARAMS
-from sim.controllers.balance_state import balance_tangent_state_6d
+from sim.controllers.balance_state import balance_tangent_state_5d
 from sim.controllers.phase import JumpPhase, JumpPhaseMachine
 from sim.controllers.vmc import VmcController
 from sim.launch_mujoco import (
@@ -209,9 +209,11 @@ def test_flight_lqr_keeps_pitch_roll_control_and_releases_wheel_targets(tmp_path
     control = controller(model, data, state)
 
     assert np.any(np.abs(control) > 1e-9)
-    assert lqr.target[4] == balance_tangent_state_6d(model, data, state)[4]
-    assert lqr.target[5] == 0.0
-    assert lqr.gain.shape == (2, 6)
+    # 5D state: target[4] 是 wheel_vel target, FLIGHT 释放为 0
+    assert lqr.target[4] == 0.0
+    assert lqr.gain.shape == (2, 5)
+    # 当前 tangent state 不应该影响 LQR target shape
+    assert balance_tangent_state_5d(model, data, state).shape == (5,)
 
 
 def test_cmd_jump_rollout_reaches_airborne_contact_state(tmp_path: Path) -> None:

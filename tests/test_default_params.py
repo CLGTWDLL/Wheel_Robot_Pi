@@ -10,7 +10,7 @@ from sim.controllers.default_params import STAND_PARAMS, params_from_dict, param
 def test_combined_params_roundtrip_preserves_control_fields() -> None:
     params = replace(
         STAND_PARAMS,
-        q_diag=np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        q_diag=np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
         r_diag=np.array([7.0, 8.0]),
         target_velocity=0.31,
         pitch_trim=0.12,

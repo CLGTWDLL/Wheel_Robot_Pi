@@ -93,7 +93,10 @@ def test_reduced_balance_system_is_6d_2input_and_stabilizable(tmp_path: Path) ->
     model, data = _stand_model(tmp_path)
 
     a, b = _reduced_balance_system(model, data)
-    gain = compute_balance_lqr_gain(model, data, STAND_PARAMS.q_diag, STAND_PARAMS.r_diag)
+    # 5D 重构后 STAND_PARAMS.q_diag 是 5 维，这里手动给 6D 测原有 6D 路径
+    q_diag_6d = np.array([1000.0, 200.0, 1000.0, 200.0, 50.0, 500.0])
+    r_diag_6d = np.array([200.0, 400.0])
+    gain = compute_balance_lqr_gain(model, data, q_diag_6d, r_diag_6d)
     eigenvalues = np.linalg.eigvals(a - b @ gain)
 
     assert a.shape == (6, 6)

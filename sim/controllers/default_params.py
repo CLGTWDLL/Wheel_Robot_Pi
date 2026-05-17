@@ -39,11 +39,9 @@ STAND_PARAMS = CombinedParams(
     ),
     # 2026-05-16 retune after mass rebalance (10.24 kg → 2.20 kg).
     # B matrix scaled ~7× because B ∝ 1/(M·L) and CoM dropped 36 mm.
-    # Old Q/R saturated wheels at pitch=0.05 rad. New tuning:
-    #   - lower pitch weight (5000 → 1000) to allow natural ±0.03 rad lean
-    #   - R bumped 200× to keep K[0,0] in non-saturating range
-    #   - pitch_trim=-0.02 ≈ CoM y-offset / pendulum length
-    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 50.0, 500.0]),
+    # 2026-05-17 重构到 5D LQR：state 为 [pitch, pitch_rate, roll, roll_rate, wheel_vel]，
+    # 不再包含 wheel_pos。原 Q[4]=50 (wheel_pos) 已删除，原 Q[5]=500 (wheel_vel) 平移到 Q[4]。
+    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
     r_diag=np.array([200.0, 400.0]),
     velocity_kp=0.5,
     velocity_ki=0.3,
@@ -75,7 +73,7 @@ STAND_THEN_DRIVE_PARAMS = CombinedParams(
         jump_extend_feedforward=9.0,
         jump_extend_feedforward_duration=0.05,
     ),
-    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 50.0, 500.0]),
+    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
     r_diag=np.array([200.0, 400.0]),
     pitch_trim=-0.02,
     pitch_trim_from_lut=False,

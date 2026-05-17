@@ -176,7 +176,6 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
             trial.suggest_float("q_pitch_rate", 100.0, 20000.0, log=True),
             trial.suggest_float("q_roll", 1000.0, 100000.0, log=True),
             trial.suggest_float("q_roll_rate", 100.0, 20000.0, log=True),
-            trial.suggest_float("q_wheel_pos", 0.01, 200.0, log=True),
             trial.suggest_float("q_wheel_vel", 1e-4, 20.0, log=True),
         ]),
         r_diag=np.array([
@@ -365,8 +364,7 @@ def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> Optimizat
             "q_pitch_rate": max(100.0, STAND_PARAMS.q_diag[1]),
             "q_roll": max(1000.0, STAND_PARAMS.q_diag[2]),
             "q_roll_rate": max(100.0, STAND_PARAMS.q_diag[3]),
-            "q_wheel_pos": max(0.01, STAND_PARAMS.q_diag[4]),
-            "q_wheel_vel": max(1e-4, STAND_PARAMS.q_diag[5]),
+            "q_wheel_vel": max(1e-4, STAND_PARAMS.q_diag[4]),
             "r_torque1": max(0.1, STAND_PARAMS.r_diag[0]),
             "r_torque2": max(0.1, STAND_PARAMS.r_diag[1]),
             "velocity_kp": max(0.01, STAND_PARAMS.velocity_kp),

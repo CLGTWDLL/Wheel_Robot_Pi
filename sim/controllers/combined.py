@@ -8,7 +8,7 @@ import numpy as np
 import mujoco
 
 from sim.controllers.balance_lqr import LEG_ROLL_DIFF_SIGNS
-from sim.controllers.balance_state import balance_tangent_state_6d
+from sim.controllers.balance_state import balance_tangent_state_5d
 from sim.controllers.lqr import LqrController
 from sim.controllers.phase import JumpPhaseMachine, JumpPhase
 from sim.controllers.vmc import LEG_CLOSED_LOOP, VmcController, VmcParams
@@ -22,7 +22,8 @@ class CombinedParams:
 
     Attributes:
         vmc: VMC 高度控制参数。
-        q_diag: LQR 状态权重对角线 [pitch, pitch_rate, roll, roll_rate, wheel_pos, wheel_vel]。
+        q_diag: LQR 状态权重对角线 [pitch, pitch_rate, roll, roll_rate, wheel_vel]。
+            wheel_pos 不在 LQR state 中，避免位置反馈与平衡所需的轮子运动正反馈。
         r_diag: LQR 虚拟控制权重对角线 [forward_wheel, roll_diff_leg]。
         target_velocity: 目标前进速度 (m/s)。可运行时修改。
         pitch_trim: 手动稳态 pitch 偏移，仅在 pitch_trim_from_lut=False 时使用。
@@ -80,9 +81,9 @@ class CombinedController:
         return (self._height_bin(state), roll_bin)
 
     def _compute_lqr_gain(self, model: Any, data: Any) -> np.ndarray:
-        from sim.controllers.balance_lqr import compute_balance_lqr_gain
+        from sim.controllers.balance_lqr import compute_balance_lqr_gain_5d
 
-        reduced_gain = compute_balance_lqr_gain(model, data, self.params.q_diag, self.params.r_diag)
+        reduced_gain = compute_balance_lqr_gain_5d(model, data, self.params.q_diag, self.params.r_diag)
         return reduced_gain
 
     def _initialize_lqr(self, model: Any, data: Any, state: SimState) -> None:
@@ -97,13 +98,13 @@ class CombinedController:
         self._active_lqr_gain_key = gain_key
 
         feedforward = np.zeros(2)
-        target = balance_tangent_state_6d(model, data, state).copy()
+        target = balance_tangent_state_5d(model, data, state).copy()
         target[0] = self._pitch_trim_for_state(model, data)
         target[1] = 0.0
         target[2] = 0.0
         target[3] = 0.0
-        target[5] = self.params.target_velocity
-        self._lqr_controller = LqrController(gain, target, feedforward, balance_tangent_state_6d)
+        target[4] = self.params.target_velocity
+        self._lqr_controller = LqrController(gain, target, feedforward, balance_tangent_state_5d)
 
     def _ensure_lqr_height_bin(self, model: Any, data: Any, state: SimState) -> None:
         if self._lqr_controller is None:
@@ -146,21 +147,18 @@ class CombinedController:
         return self.params.ff_gain * self.params.vmc.lut.dy_wheel_dh(current_leg_height) * dh_dt_cmd
 
     def _update_lqr_target(self, model: Any, data: Any, state: SimState, dt: float, phase: JumpPhase) -> None:
-        """每步更新 LQR 目标: 速度跟踪 + pitch 前倾补偿。"""
+        """每步更新 LQR 5D 目标: 速度跟踪 + pitch 前倾补偿。
+
+        5D state: [pitch, pitch_rate, roll, roll_rate, wheel_vel]。无 wheel_pos，
+        因此本函数只写 target[0] (pitch) 和 target[4] (wheel_vel)。位置漂移由外环
+        (target_velocity 或可选的 position anchor) 处理，不在 LQR 内环。
+        """
         if self._lqr_controller is None:
             return
-        current_tangent = balance_tangent_state_6d(None, None, state)
-        current_wheel_pos = float(current_tangent[4])
-        current_wheel_vel = float(current_tangent[5])
+        current_tangent = balance_tangent_state_5d(None, None, state)
+        current_wheel_vel = float(current_tangent[4])
         current_leg_height, _wheel_mid_z = self._average_leg_height_and_wheel_mid_z(model, data)
         release_wheel_target = phase == JumpPhase.FLIGHT
-        # LAND/RECOVER 阶段冲击瞬态，宽容轮位漂移：让 target[4] 跟随当前轮位，
-        # 避免起跳期间累积的位置误差经强位置反馈翻译成大幅 wheel torque 把机器人向前栽。
-        reset_wheel_pos_target = phase in (
-            JumpPhase.FLIGHT,
-            JumpPhase.LAND,
-            JumpPhase.RECOVER,
-        )
         velocity_target = 0.0 if release_wheel_target else self.params.target_velocity + self._height_wheel_velocity_ff
         velocity_error = velocity_target - current_wheel_vel
 
@@ -179,22 +177,7 @@ class CombinedController:
         self._lqr_controller.target[1] = 0.0
         self._lqr_controller.target[2] = 0.0
         self._lqr_controller.target[3] = 0.0
-
-        # 运动模式: 同步目标位置到当前位置，避免位置环"橡皮筋"。
-        # 站立模式 (target_velocity≈0): 保持初始目标位置, 启用 LQR 位置闭环消除漂移。
-        # 落地瞬态 (LAND/RECOVER): 同步当前位置，避免冲击位移触发强位置反馈把机器人栽倒。
-        # 站立但仍带有残余角速度 (|wheel_vel|>0.1)：跟随当前轮位，防止位置锁与轮子
-        # 跟随 CoM 的必要运动形成正反馈把身体反向栽倒（2026-05-17 DARE LQR 后症状）。
-        if (
-            reset_wheel_pos_target
-            or abs(velocity_target) > 1e-4
-            or abs(current_wheel_vel) > 0.1
-        ):
-            self._lqr_controller.target[4] = current_wheel_pos
-        if not reset_wheel_pos_target and abs(self._height_wheel_velocity_ff) > 1e-6:
-            self._lqr_controller.target[4] += self._height_wheel_velocity_ff * dt
-
-        self._lqr_controller.target[5] = velocity_target
+        self._lqr_controller.target[4] = velocity_target
 
         self._prev_target_velocity = self.params.target_velocity
 
@@ -206,8 +189,9 @@ class CombinedController:
         original_gain = self._lqr_controller.gain
         original_q_diag = self.params.q_diag
         scheduled_q = original_q_diag.copy()
+        # 5D state: Q[4] 是 wheel_vel。飞行期间无地面摩擦，速度反馈意义不大，
+        # 弱化让 LQR 优先 pitch/roll 控制。
         scheduled_q[4] = self.params.flight_wheel_q
-        scheduled_q[5] = self.params.flight_wheel_q
         try:
             if not np.allclose(scheduled_q, original_q_diag):
                 self.params.q_diag = scheduled_q
@@ -220,7 +204,7 @@ class CombinedController:
     def _compute_lqr_virtual_outputs(self, lqr_control: np.ndarray) -> tuple[float, float]:
         """返回 LQR 虚拟输出: (forward_wheel, roll_diff_leg)。"""
         if lqr_control.shape != (2,):
-            raise ValueError("6D LQR virtual control must have shape (2,)")
+            raise ValueError("LQR virtual control must have shape (2,)")
         return float(lqr_control[0]), float(lqr_control[1])
 
     def _compute_yaw_correction(self, state: SimState, dt: float) -> float:
