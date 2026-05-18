@@ -53,11 +53,11 @@ def test_single_wheel_trapezoid_width_is_halved_without_changing_side_profile(tm
 
     ramp_size = _float_triplet(ramp.get("size"))
     platform_size = _float_triplet(platform.get("size"))
-    assert ramp_size[1] == 0.2
-    assert platform_size[1] == 0.2
-    assert ramp_size[0] == 0.101519703
+    assert ramp_size[0] == 0.2
+    assert platform_size[0] == 0.2
+    assert ramp_size[1] == 0.101519703
     assert ramp_size[2] == 0.01
-    assert platform_size[0] == 0.125
+    assert platform_size[1] == 0.125
     assert platform_size[2] == 0.0175
 
 
@@ -81,7 +81,7 @@ def test_rock_road_terrain_coexists_with_trapezoid(tmp_path: Path) -> None:
     assert geom.get("hfield") == "rock_road_hfield"
     assert geom.get("contype") == "1"
     assert geom.get("conaffinity") == "1"
-    assert _float_quad(hfield.get("size")) == (0.6, 0.3, 0.018, 0.02)
+    assert _float_quad(hfield.get("size")) == (0.3, 0.6, 0.018, 0.02)
     assert (tmp_path / "rock_road_hfield.png").is_file()
 
     model = mujoco.MjModel.from_xml_path(str(model_path))
@@ -91,7 +91,7 @@ def test_rock_road_terrain_coexists_with_trapezoid(tmp_path: Path) -> None:
     assert geom_id >= 0
     assert model.hfield_nrow[hfield_id] == 25
     assert model.hfield_ncol[hfield_id] == 49
-    assert model.hfield_size[hfield_id].tolist() == [0.6, 0.3, 0.018, 0.02]
+    assert model.hfield_size[hfield_id].tolist() == [0.3, 0.6, 0.018, 0.02]
 
 
 def test_single_wheel_trapezoid_keeps_closed_loop_equality_constraints(tmp_path: Path) -> None:
@@ -130,9 +130,9 @@ def test_default_trapezoid_starts_ahead_of_initial_wheels(tmp_path: Path) -> Non
     left_wheel = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "wheel_left")
     right_wheel = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "wheel_right")
 
-    ramp_min_x = float(data.geom_xpos[ramp_geom, 0] - model.geom_size[ramp_geom, 0])
-    initial_wheel_max_x = float(max(data.xipos[left_wheel, 0], data.xipos[right_wheel, 0]))
-    assert ramp_min_x > initial_wheel_max_x + 0.02
+    ramp_min_y = float(data.geom_xpos[ramp_geom, 1] - model.geom_size[ramp_geom, 1])
+    initial_wheel_max_y = float(max(data.xipos[left_wheel, 1], data.xipos[right_wheel, 1]))
+    assert ramp_min_y > initial_wheel_max_y + 0.02
 
 
 def test_default_rock_road_starts_after_spawn_and_trapezoid(tmp_path: Path) -> None:
@@ -148,11 +148,11 @@ def test_default_rock_road_starts_after_spawn_and_trapezoid(tmp_path: Path) -> N
     left_wheel = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "wheel_left")
     right_wheel = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "wheel_right")
 
-    road_min_x = float(data.geom_xpos[road_geom, 0] - model.hfield_size[road_hfield, 0])
-    ramp_max_x = float(data.geom_xpos[ramp_down, 0] + model.geom_size[ramp_down, 0])
-    initial_wheel_max_x = float(max(data.xipos[left_wheel, 0], data.xipos[right_wheel, 0]))
-    assert road_min_x > initial_wheel_max_x + 0.5
-    assert road_min_x > ramp_max_x + 0.05
+    road_min_y = float(data.geom_xpos[road_geom, 1] - model.hfield_size[road_hfield, 1])
+    ramp_max_y = float(data.geom_xpos[ramp_down, 1] + model.geom_size[ramp_down, 1])
+    initial_wheel_max_y = float(max(data.xipos[left_wheel, 1], data.xipos[right_wheel, 1]))
+    assert road_min_y > initial_wheel_max_y + 0.5
+    assert road_min_y > ramp_max_y + 0.05
 
 
 def test_launch_controlled_model_can_disable_default_trapezoid(tmp_path: Path) -> None:

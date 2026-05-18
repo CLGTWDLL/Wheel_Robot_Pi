@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import mujoco
 import numpy as np
 from scipy.optimize import least_squares
 
+from sim.controllers.phase import JumpPhase, JumpPhaseMachine
 from sim.controllers.vmc import (
     BASE_BODY_NAME,
     LEG_CLOSED_LOOP,
@@ -25,6 +27,26 @@ def _load_model(tmp_path: Path) -> tuple[mujoco.MjModel, mujoco.MjData]:
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
     return model, data
+
+
+def _roll_level_controller(
+    phase: JumpPhase = JumpPhase.STAND,
+) -> tuple[VmcController, JumpPhaseMachine]:
+    phase_machine = JumpPhaseMachine()
+    phase_machine.phase = phase
+    controller = VmcController(
+        VmcParams(
+            nominal_height=0.140,
+            kp_motor=0.0,
+            kd_motor=0.0,
+            gravity_compensation_scale=0.0,
+            roll_level_kp_height=0.010,
+            roll_level_kd_height=0.002,
+            roll_level_offset_limit=0.002,
+        ),
+        phase_machine=phase_machine,
+    )
+    return controller, phase_machine
 
 
 def test_leg_height_uses_world_z_distance(tmp_path: Path) -> None:
@@ -106,6 +128,44 @@ def test_vmc_slews_nominal_height_and_reports_target_motor_rate(tmp_path: Path) 
         rtol=0.0,
         atol=1e-9,
     )
+
+
+def test_vmc_roll_leveling_offsets_left_and_right_targets_by_roll_sign(tmp_path: Path) -> None:
+    model, data = _load_model(tmp_path)
+    controller, _phase_machine = _roll_level_controller()
+    neutral_offsets = controller._neutral_offsets(model, data)
+
+    controller.preview_control(model, data, replace(_state(model, data), roll=0.10, roll_rate=0.0))
+    assert np.isclose(controller.last_target_heights["left"] - (0.140 + neutral_offsets["left"]), 0.001)
+    assert np.isclose(controller.last_target_heights["right"] - (0.140 + neutral_offsets["right"]), -0.001)
+
+    controller.preview_control(model, data, replace(_state(model, data), roll=-0.10, roll_rate=0.0))
+    assert np.isclose(controller.last_target_heights["left"] - (0.140 + neutral_offsets["left"]), -0.001)
+    assert np.isclose(controller.last_target_heights["right"] - (0.140 + neutral_offsets["right"]), 0.001)
+
+
+def test_vmc_roll_leveling_uses_roll_rate_and_clips_height_offset(tmp_path: Path) -> None:
+    model, data = _load_model(tmp_path)
+    controller, _phase_machine = _roll_level_controller()
+    neutral_offsets = controller._neutral_offsets(model, data)
+
+    controller.preview_control(model, data, replace(_state(model, data), roll=0.0, roll_rate=2.0))
+
+    assert np.isclose(controller.last_target_heights["left"] - (0.140 + neutral_offsets["left"]), 0.002)
+    assert np.isclose(controller.last_target_heights["right"] - (0.140 + neutral_offsets["right"]), -0.002)
+
+
+def test_vmc_roll_leveling_is_disabled_outside_stand_phase(tmp_path: Path) -> None:
+    model, data = _load_model(tmp_path)
+
+    for phase in (JumpPhase.CROUCH, JumpPhase.EXTEND, JumpPhase.FLIGHT, JumpPhase.LAND):
+        zero_roll_controller, _ = _roll_level_controller(phase)
+        rolled_controller, _ = _roll_level_controller(phase)
+
+        zero_roll_controller.preview_control(model, data, replace(_state(model, data), roll=0.0, roll_rate=0.0))
+        rolled_controller.preview_control(model, data, replace(_state(model, data), roll=0.25, roll_rate=1.0))
+
+        assert rolled_controller.last_target_heights == zero_roll_controller.last_target_heights
 
 
 def test_closed_loop_leg_motor_jacobian_matches_constrained_finite_difference(tmp_path: Path) -> None:

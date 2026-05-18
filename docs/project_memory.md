@@ -152,6 +152,9 @@ FALLEN
 - VMC `nominal_height = 0.142`
 - VMC `kp_motor = 30.0`
 - VMC `kd_motor = 1.0`
+- VMC `roll_level_kp_height = 0.0`
+- VMC `roll_level_kd_height = 0.0`
+- VMC `roll_level_offset_limit = 0.0`
 - VMC `jump_extend_feedforward = 8.0`
 
 `STAND_THEN_DRIVE_PARAMS` 已替换旧 Optuna 参数，当前与 `STAND_PARAMS` 同一量级，`jump_extend_feedforward = 9.0`。

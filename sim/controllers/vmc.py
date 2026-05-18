@@ -60,6 +60,9 @@ class VmcParams:
     max_height_rate: float = 0.1
     jump_extend_feedforward: float = 0.0
     jump_extend_feedforward_duration: float = 0.0
+    roll_level_kp_height: float = 0.0
+    roll_level_kd_height: float = 0.0
+    roll_level_offset_limit: float = 0.0
     lut: LegHeightLUT = field(default_factory=LegHeightLUT.from_json)
 
 
@@ -77,6 +80,7 @@ class VmcController:
         self._crouch_start_height: float | None = None
         self._target_motor_angle_prev: dict[str, float] = {}
         self.last_target_motor_rate: dict[str, float] = {side: 0.0 for side in LEG_CLOSED_LOOP}
+        self.last_target_heights: dict[str, float] = {side: 0.0 for side in LEG_CLOSED_LOOP}
 
     def __call__(self, model: mujoco.MjModel, data: mujoco.MjData, state: SimState) -> np.ndarray:
         return self._control(model, data, state, update_phase=True)
@@ -115,6 +119,9 @@ class VmcController:
             self.params.max_height_rate,
             self.params.jump_extend_feedforward,
             self.params.jump_extend_feedforward_duration,
+            self.params.roll_level_kp_height,
+            self.params.roll_level_kd_height,
+            self.params.roll_level_offset_limit,
         ])
         if not np.all(np.isfinite(params_values)):
             raise ValueError("VMC params must be finite")
@@ -158,6 +165,7 @@ class VmcController:
         elif phase == JumpPhase.FALLEN:
             self._crouch_start_height = None
             self.last_target_motor_rate = {side: 0.0 for side in LEG_CLOSED_LOOP}
+            self.last_target_heights = {side: 0.0 for side in LEG_CLOSED_LOOP}
             return np.zeros(model.nu)
         else:
             self._crouch_start_height = None
@@ -177,13 +185,15 @@ class VmcController:
         self._motor_jacobian_step_count += 1
 
         neutral_offsets = self._neutral_offsets(model, data)
+        roll_level_offsets = self._roll_level_height_offsets(phase, state)
 
         for side, geometry in LEG_CLOSED_LOOP.items():
             act_idx = addresses.actuators[geometry.motor_joint]
             motor_qpos_idx = addresses.joint_qpos[geometry.motor_joint]
             motor_qvel_idx = addresses.joint_qvel[geometry.motor_joint]
 
-            side_target_height = target_height + neutral_offsets[side]
+            side_target_height = target_height + neutral_offsets[side] + roll_level_offsets[side]
+            self.last_target_heights[side] = side_target_height
             target_motor_angle = self.params.lut.motor_angle_from_height(side_target_height)
             previous_angle = self._target_motor_angle_prev.get(side)
             if previous_angle is None:
@@ -230,6 +240,17 @@ class VmcController:
         delta = float(np.clip(target - self._height_filtered, -max_step, max_step))
         self._height_filtered += delta
         return self._height_filtered
+
+    def _roll_level_height_offsets(self, phase: JumpPhase, state: SimState) -> dict[str, float]:
+        if phase != JumpPhase.STAND:
+            return {side: 0.0 for side in LEG_CLOSED_LOOP}
+        limit = max(float(self.params.roll_level_offset_limit), 0.0)
+        offset = (
+            float(self.params.roll_level_kp_height) * float(state.roll)
+            + float(self.params.roll_level_kd_height) * float(state.roll_rate)
+        )
+        offset = float(np.clip(offset, -limit, limit))
+        return {"left": offset, "right": -offset}
 
     def _neutral_offsets(self, model: mujoco.MjModel, data: mujoco.MjData) -> dict[str, float]:
         offsets = self._neutral_height_offsets.get(id(model))

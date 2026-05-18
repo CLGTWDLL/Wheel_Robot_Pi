@@ -10,6 +10,7 @@ from sim.controllers.default_params import STAND_PARAMS, params_from_dict, param
 def test_combined_params_roundtrip_preserves_control_fields() -> None:
     params = replace(
         STAND_PARAMS,
+        vmc=replace(STAND_PARAMS.vmc),
         q_diag=np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
         r_diag=np.array([7.0, 8.0]),
         target_velocity=0.31,
@@ -30,6 +31,9 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
     params.vmc.crouch_duration = 0.21
     params.vmc.land_kp_scale = 0.6
     params.vmc.land_kd_scale = 2.7
+    params.vmc.roll_level_kp_height = 0.031
+    params.vmc.roll_level_kd_height = 0.006
+    params.vmc.roll_level_offset_limit = 0.005
 
     restored = params_from_dict(params_to_dict(params))
 
@@ -52,3 +56,26 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
     assert restored.vmc.crouch_duration == params.vmc.crouch_duration
     assert restored.vmc.land_kp_scale == params.vmc.land_kp_scale
     assert restored.vmc.land_kd_scale == params.vmc.land_kd_scale
+    assert restored.vmc.roll_level_kp_height == params.vmc.roll_level_kp_height
+    assert restored.vmc.roll_level_kd_height == params.vmc.roll_level_kd_height
+    assert restored.vmc.roll_level_offset_limit == params.vmc.roll_level_offset_limit
+
+
+def test_params_from_dict_disables_roll_leveling_for_old_configs() -> None:
+    data = params_to_dict(STAND_PARAMS)
+    data["vmc"].pop("roll_level_kp_height")
+    data["vmc"].pop("roll_level_kd_height")
+    data["vmc"].pop("roll_level_offset_limit")
+
+    restored = params_from_dict(data)
+
+    assert restored.vmc.roll_level_kp_height == 0.0
+    assert restored.vmc.roll_level_kd_height == 0.0
+    assert restored.vmc.roll_level_offset_limit == 0.0
+
+
+def test_stand_params_keep_roll_leveling_disabled_by_default() -> None:
+    assert STAND_PARAMS.r_diag.tolist() == [200.0, 400.0]
+    assert STAND_PARAMS.vmc.roll_level_kp_height == 0.0
+    assert STAND_PARAMS.vmc.roll_level_kd_height == 0.0
+    assert STAND_PARAMS.vmc.roll_level_offset_limit == 0.0

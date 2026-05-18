@@ -24,13 +24,14 @@ class SingleWheelTrapezoidTerrain:
     ramp_length: float = 0.20
     platform_length: float = 0.25
     width: float = 0.40
-    x_start: float = 0.22
+    y_start: float = 0.22
+    side_x: float = 0.125
     thickness: float = 0.02
 
 
 @dataclass(frozen=True)
 class RockRoadTerrain:
-    x_start: float = 1.05
+    y_start: float = 1.05
     length: float = 1.20
     width: float = 0.60
     max_height: float = 0.018
@@ -206,7 +207,8 @@ def _add_single_wheel_trapezoid(root: ET.Element, config: SingleWheelTrapezoidTe
     platform_length = float(config.platform_length)
     width = float(config.width)
     thickness = float(config.thickness)
-    x_start = float(config.x_start if config.side == "left" else -config.x_start - 2.0 * ramp_length - platform_length)
+    y_start = float(config.y_start)
+    x_pos = float(config.side_x if config.side == "left" else -config.side_x)
     if min(height, ramp_length, platform_length, width, thickness) <= 0.0:
         raise ValueError("single-wheel trapezoid terrain dimensions must be positive")
 
@@ -215,30 +217,29 @@ def _add_single_wheel_trapezoid(root: ET.Element, config: SingleWheelTrapezoidTe
     cos_angle = cos(angle)
     sin_angle = sin(angle)
     ramp_z = 0.5 * height - 0.5 * thickness * cos_angle
-    y_pos = 0.0
     y_half = 0.5 * width
 
     _terrain_box(
         worldbody,
         name="single_wheel_trapezoid_ramp_up",
-        size=(0.5 * ramp_span, y_half, 0.5 * thickness),
-        pos=(x_start + 0.5 * ramp_length + 0.5 * thickness * sin_angle, y_pos, ramp_z),
-        euler=(0.0, -angle, 0.0),
+        size=(y_half, 0.5 * ramp_span, 0.5 * thickness),
+        pos=(x_pos, y_start + 0.5 * ramp_length + 0.5 * thickness * sin_angle, ramp_z),
+        euler=(angle, 0.0, 0.0),
     )
-    platform_start = x_start + ramp_length
+    platform_start = y_start + ramp_length
     _terrain_box(
         worldbody,
         name="single_wheel_trapezoid_platform",
-        size=(0.5 * platform_length, y_half, 0.5 * height),
-        pos=(platform_start + 0.5 * platform_length, y_pos, 0.5 * height),
+        size=(y_half, 0.5 * platform_length, 0.5 * height),
+        pos=(x_pos, platform_start + 0.5 * platform_length, 0.5 * height),
     )
     down_start = platform_start + platform_length
     _terrain_box(
         worldbody,
         name="single_wheel_trapezoid_ramp_down",
-        size=(0.5 * ramp_span, y_half, 0.5 * thickness),
-        pos=(down_start + 0.5 * ramp_length - 0.5 * thickness * sin_angle, y_pos, ramp_z),
-        euler=(0.0, angle, 0.0),
+        size=(y_half, 0.5 * ramp_span, 0.5 * thickness),
+        pos=(x_pos, down_start + 0.5 * ramp_length - 0.5 * thickness * sin_angle, ramp_z),
+        euler=(-angle, 0.0, 0.0),
     )
 
 
@@ -292,8 +293,8 @@ def _add_rock_road(root: ET.Element, config: RockRoadTerrain, output_root: Path)
                 "file": str(heightmap_path),
                 "size": _format_float_quad(
                     (
-                        0.5 * config.length,
                         0.5 * config.width,
+                        0.5 * config.length,
                         config.max_height,
                         config.base_depth,
                     )
@@ -308,7 +309,7 @@ def _add_rock_road(root: ET.Element, config: RockRoadTerrain, output_root: Path)
             "name": "rock_road",
             "type": "hfield",
             "hfield": "rock_road_hfield",
-            "pos": _format_float_triplet((config.x_start + 0.5 * config.length, 0.0, 0.0)),
+            "pos": _format_float_triplet((0.0, config.y_start + 0.5 * config.length, 0.0)),
             "contype": "1",
             "conaffinity": "1",
             "friction": "1.0 0.02 0.001",
