@@ -24,7 +24,7 @@ def main() -> None:
     mapper = GamepadCommandMapper(
         linear_range=(-1.0, 1.0),
         angular_range=(-3.0, 3.0),
-        height_range=(0.118, 0.148),
+        height_range=(0.07844, 0.142),
     )
     print("Move left stick / press triggers for 8 seconds. Ctrl+C to stop.")
     print("-" * 70)

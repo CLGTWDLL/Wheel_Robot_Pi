@@ -16,7 +16,7 @@ from sim.gamepad import (
 
 LINEAR_RANGE = (-1.0, 1.0)
 ANGULAR_RANGE = (-3.0, 3.0)
-HEIGHT_RANGE = (0.118, 0.148)
+HEIGHT_RANGE = (0.07844, 0.142)
 
 
 @pytest.fixture

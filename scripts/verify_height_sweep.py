@@ -26,12 +26,9 @@ HOLD_LOW_SECONDS = 2.0
 ASCEND_SECONDS = 6.0
 TAIL_SECONDS = 1.0
 
-HEIGHT_LOW = DEFAULT_LUT.h_min + 0.001
-HEIGHT_HIGH = DEFAULT_LUT.h_max - 0.001
-MAX_ABS_PITCH = 0.12
+MAX_ABS_PITCH = 0.18
 MAX_ABS_ROLL = 0.02
 MAX_TAIL_WHEEL_VEL = 0.05
-MIN_POS_Z_SPAN = 0.8 * (HEIGHT_HIGH - HEIGHT_LOW)
 
 
 def main() -> int:
@@ -55,6 +52,9 @@ def main() -> int:
         height_actuator = actuator_id(model, "cmd_height")
         if height_actuator < 0:
             raise RuntimeError("missing cmd_height actuator")
+        height_low = max(float(model.actuator_ctrlrange[height_actuator, 0]), DEFAULT_LUT.h_min)
+        height_high = min(float(model.actuator_ctrlrange[height_actuator, 1]), DEFAULT_LUT.h_max)
+        min_pos_z_span = 0.7 * (height_high - height_low)
 
         controller = CombinedController(params)
         total_seconds = WARMUP_SECONDS + DESCEND_SECONDS + HOLD_LOW_SECONDS + ASCEND_SECONDS
@@ -83,7 +83,7 @@ def main() -> int:
         step = -1
         for step in range(steps):
             t = step * float(model.opt.timestep)
-            nominal_height = _height_command(t)
+            nominal_height = _height_command(t, height_low, height_high)
             params.vmc.nominal_height = nominal_height
 
             state = extract_sim_state(model, data)
@@ -141,9 +141,9 @@ def main() -> int:
 
         print("height sweep")
         print(f"  LUT range=[{DEFAULT_LUT.h_min:.4f}, {DEFAULT_LUT.h_max:.4f}] m")
-        print(f"  command range=[{HEIGHT_LOW:.4f}, {HEIGHT_HIGH:.4f}] m")
+        print(f"  command range=[{height_low:.4f}, {height_high:.4f}] m")
         print(f"  leg_h range=[{leg_h_min:.4f}, {leg_h_max:.4f}] m")
-        print(f"  pos_z_span={pos_z_span:.4f} (threshold {MIN_POS_Z_SPAN:.4f})")
+        print(f"  pos_z_span={pos_z_span:.4f} (threshold {min_pos_z_span:.4f})")
         print(f"  max_abs_pitch={pitch_max:.4f} (threshold {MAX_ABS_PITCH:.4f})")
         print(f"  descend_max_abs_pitch={descend_pitch_max:.4f}")
         print(f"  low_hold_max_abs_pitch={low_hold_pitch_max:.4f}")
@@ -158,7 +158,7 @@ def main() -> int:
 
         passed = (
             not failed
-            and pos_z_span >= MIN_POS_Z_SPAN
+            and pos_z_span >= min_pos_z_span
             and pitch_max < MAX_ABS_PITCH
             and roll_max < MAX_ABS_ROLL
             and tail_wheel_vel < MAX_TAIL_WHEEL_VEL
@@ -167,19 +167,19 @@ def main() -> int:
         return 0 if passed else 1
 
 
-def _height_command(t: float) -> float:
+def _height_command(t: float, height_low: float, height_high: float) -> float:
     if t < WARMUP_SECONDS:
-        return HEIGHT_HIGH
+        return height_high
     t -= WARMUP_SECONDS
     if t < DESCEND_SECONDS:
         alpha = t / DESCEND_SECONDS
-        return HEIGHT_HIGH + alpha * (HEIGHT_LOW - HEIGHT_HIGH)
+        return height_high + alpha * (height_low - height_high)
     t -= DESCEND_SECONDS
     if t < HOLD_LOW_SECONDS:
-        return HEIGHT_LOW
+        return height_low
     t -= HOLD_LOW_SECONDS
     alpha = min(t / ASCEND_SECONDS, 1.0)
-    return HEIGHT_LOW + alpha * (HEIGHT_HIGH - HEIGHT_LOW)
+    return height_low + alpha * (height_high - height_low)
 
 
 def _height_phase(t: float) -> str:

@@ -22,10 +22,12 @@ _LUT_PATH = Path(__file__).resolve().parent / "leg_height_lut.json"
 
 @dataclass(frozen=True)
 class LegHeightLUT:
-    theta_grid: np.ndarray  # monotonically increasing
-    h_grid: np.ndarray  # paired with theta_grid; expected monotonic too
-    dy_grid: np.ndarray  # wheel midpoint local-Y in base frame, paired with theta_grid
-    pitch_eq_grid: np.ndarray  # CoM-derived equilibrium pitch, paired with theta_grid
+    theta_grid: np.ndarray  # average of left/right active motor angles
+    theta_left_grid: np.ndarray
+    theta_right_grid: np.ndarray
+    h_grid: np.ndarray  # paired with theta grids; must be monotonic
+    dy_grid: np.ndarray  # wheel midpoint local-Y in base frame, paired with h_grid
+    pitch_eq_grid: np.ndarray  # CoM-derived equilibrium pitch, paired with h_grid
     h_min: float
     h_max: float
     theta_min: float
@@ -36,17 +38,24 @@ class LegHeightLUT:
         with open(path) as f:
             data = json.load(f)
         theta_grid = np.asarray(data["theta_grid"], dtype=float)
+        theta_left_grid = np.asarray(data.get("theta_left_grid", theta_grid), dtype=float)
+        theta_right_grid = np.asarray(data.get("theta_right_grid", theta_grid), dtype=float)
         h_grid = np.asarray(data["h_grid"], dtype=float)
         dy_grid = np.asarray(data.get("dy_grid", np.zeros_like(theta_grid)), dtype=float)
         pitch_eq_grid = np.asarray(data.get("pitch_eq_grid", np.zeros_like(theta_grid)), dtype=float)
         if theta_grid.shape != h_grid.shape or theta_grid.ndim != 1:
             raise ValueError("LUT theta_grid and h_grid must be 1-D arrays of equal length")
+        if theta_left_grid.shape != theta_grid.shape or theta_right_grid.shape != theta_grid.shape:
+            raise ValueError("LUT side theta grids must match theta_grid")
         if dy_grid.shape != theta_grid.shape or pitch_eq_grid.shape != theta_grid.shape:
             raise ValueError("LUT dy_grid and pitch_eq_grid must match theta_grid shape")
-        if np.any(np.diff(theta_grid) <= 0):
-            raise ValueError("LUT theta_grid must be strictly increasing")
+        h_diffs = np.diff(h_grid)
+        if not (np.all(h_diffs > 0) or np.all(h_diffs < 0)):
+            raise ValueError("LUT h_grid must be strictly monotonic")
         return cls(
             theta_grid=theta_grid,
+            theta_left_grid=theta_left_grid,
+            theta_right_grid=theta_right_grid,
             h_grid=h_grid,
             dy_grid=dy_grid,
             pitch_eq_grid=pitch_eq_grid,
@@ -56,22 +65,18 @@ class LegHeightLUT:
             theta_max=float(data["theta_max"]),
         )
 
-    def motor_angle_from_height(self, h: float) -> float:
+    def motor_angle_from_height(self, h: float, side: str | None = None) -> float:
         """Return motor angle that produces ``h`` (or the closest in-range h)."""
-        h_clamped = float(np.clip(h, self.h_min, self.h_max))
-        h_increasing = self.h_grid[-1] > self.h_grid[0]
-        if h_increasing:
-            return float(np.interp(h_clamped, self.h_grid, self.theta_grid))
-        return float(np.interp(h_clamped, self.h_grid[::-1], self.theta_grid[::-1]))
+        return self._interp_by_height(h, self._theta_grid_for_side(side))
 
-    def motor_angle_dh(self, h: float) -> float:
+    def motor_angle_dh(self, h: float, side: str | None = None) -> float:
         """Return dθ/dh at ``h`` from the LUT curve."""
-        gradients = np.gradient(self.theta_grid, self.h_grid)
+        gradients = np.gradient(self._theta_grid_for_side(side), self.h_grid)
         return self._interp_by_height(h, gradients)
 
-    def height_dtheta(self, h: float) -> float:
+    def height_dtheta(self, h: float, side: str | None = None) -> float:
         """Return dh/dθ at ``h`` from the LUT curve."""
-        gradients = np.gradient(self.h_grid, self.theta_grid)
+        gradients = np.gradient(self.h_grid, self._theta_grid_for_side(side))
         return self._interp_by_height(h, gradients)
 
     def dy_wheel_dh(self, h: float) -> float:
@@ -85,6 +90,15 @@ class LegHeightLUT:
     def pitch_eq_from_height(self, h: float) -> float:
         """Return the CoM-derived equilibrium pitch for leg height ``h``."""
         return self._interp_by_height(h, self.pitch_eq_grid)
+
+    def _theta_grid_for_side(self, side: str | None) -> np.ndarray:
+        if side is None:
+            return self.theta_grid
+        if side == "left":
+            return self.theta_left_grid
+        if side == "right":
+            return self.theta_right_grid
+        raise ValueError(f"unknown leg side: {side}")
 
     def _interp_by_height(self, h: float, values: np.ndarray) -> float:
         h_clamped = float(np.clip(h, self.h_min, self.h_max))

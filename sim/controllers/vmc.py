@@ -53,6 +53,14 @@ class VmcParams:
     crouch_target_height: float = 0.09
     crouch_duration: float = 0.20
     extend_offset: float = 0.05
+    # CROUCH / EXTEND / FLIGHT target_height is clamped to ≥ jump_height_min.
+    # Below this, the closed-chain motor PD has no contact normal force to lean
+    # against (轮子离地或接触力很小), so dh/dθ enters the singular zone and
+    # 11.5 N·m extend feedforward drives θ past the LUT's monotonic range,
+    # producing the "leg fully extends into singularity" failure mode when
+    # jumping from a low STAND posture. STAND is unaffected — h=0.078 站立和
+    # 移动仍可达，因为接触力提供外部约束。
+    jump_height_min: float = 0.118
     landing_damping: float = 1.0
     land_kp_scale: float = 0.5
     land_kd_scale: float = 2.5
@@ -150,18 +158,27 @@ class VmcController:
             progress = float(np.clip(self.phase_machine.time_in_phase / duration if self.phase_machine else 1.0, 0.0, 1.0))
             blend = progress**3 * (10.0 - 15.0 * progress + 6.0 * progress * progress)
             target_height = (1.0 - blend) * self._crouch_start_height + blend * self.params.crouch_target_height
+            target_height = max(target_height, float(self.params.jump_height_min))
         elif phase == JumpPhase.EXTEND:
             self._crouch_start_height = None
             target_height += self.params.extend_offset
+            target_height = max(target_height, float(self.params.jump_height_min) + float(self.params.extend_offset))
         elif phase == JumpPhase.FLIGHT:
             # 飞行中预收腿到 crouch 高度：缩短 pendulum length，落地冲击转化的
             # pitch 力矩与 L 成正比；同时给 LAND 阶段留出腿伸展行程吸收冲击。
             self._crouch_start_height = None
             target_height = self.params.crouch_target_height
+            target_height = max(target_height, float(self.params.jump_height_min))
         elif phase == JumpPhase.LAND:
             self._crouch_start_height = None
             kp_motor *= self.params.land_kp_scale
             kd_motor = kd_motor * self.params.land_kd_scale + self.params.landing_damping
+            # Avoid yanking the leg back to a low cmd_height the instant we touch
+            # down. After lift-off θ sits near LUT.theta_max; if target_height is
+            # 0.078 we get a 0.4 rad PID step which slams the body into a pitch
+            # spike. Clamp to jump_height_min and let STAND walk back down once
+            # the body has stabilized.
+            target_height = max(target_height, float(self.params.jump_height_min))
         elif phase == JumpPhase.FALLEN:
             self._crouch_start_height = None
             self.last_target_motor_rate = {side: 0.0 for side in LEG_CLOSED_LOOP}
@@ -218,7 +235,18 @@ class VmcController:
                 )
 
             if phase == JumpPhase.EXTEND:
-                control[act_idx] = gravity_torque + self.params.jump_extend_feedforward
+                # Apply the extend feedforward boost only while θ is below the
+                # extend target. Once we've reached LUT(target_height), let the
+                # PID hold position — without this gate, 11.5 N·m runs the full
+                # extend_duration regardless of how short the θ travel is, and
+                # the closed chain blows past LUT.theta_max into the singular
+                # fully-extended pose, which is exactly the "leg snaps straight
+                # and falls" failure seen from low cmd_height jumps.
+                if target_motor_angle - theta_current > 0:
+                    extend_torque = self.params.jump_extend_feedforward
+                else:
+                    extend_torque = pid_torque
+                control[act_idx] = gravity_torque + extend_torque
             else:
                 control[act_idx] = gravity_torque + pid_torque
 
@@ -227,6 +255,16 @@ class VmcController:
             for geometry in LEG_CLOSED_LOOP.values():
                 act_idx = addresses.actuators[geometry.motor_joint]
                 clipped[act_idx] = float(np.clip(clipped[act_idx], -3.5, 3.5))
+        elif phase == JumpPhase.FLIGHT:
+            # 飞行中两腿 motor 力矩通过近奇异 W 矩阵 [[0.182,0.182],[-8.77,-8.77]]
+            # 转化为 base wrench 时，pitch 系数比 thrust 系数大约 48×。两腿
+            # 同向 PID 力矩（FLIGHT 想把 motor 从 EXTEND 末位 +0.59 拉回 target
+            # +0.27 → 双 PID ≈ -9.5 N·m）会在空中产生巨大 base pitch torque，
+            # 让机器人翻转。严格 clip 到 ±1 N·m 保留少量 D-damping 让 motor
+            # 不发散，但不足以把 base 旋转起来。
+            for geometry in LEG_CLOSED_LOOP.values():
+                act_idx = addresses.actuators[geometry.motor_joint]
+                clipped[act_idx] = float(np.clip(clipped[act_idx], -1.0, 1.0))
         if not np.all(np.isfinite(clipped)):
             raise ValueError("VMC control must be finite")
         return clipped

@@ -557,14 +557,11 @@ def _replace_actuators(root: ET.Element) -> None:
                 "gear": "1",
             },
         )
-    # cmd_height range matches the LUT's reachable h interval (see
-    # sim/controllers/leg_height_lut.json). Slightly inset so the LUT inverse
-    # interpolation never has to clamp.
-    # 2026-05-16: upper bound dropped from 0.148 → 0.142 because the current
-    # 2.2 kg LQR/VMC tune oscillates above h=0.142 (LUT d²h/dθ² flips sign in
-    # [0.144, 0.149] and LQR linearization point shifts). Reverting to 0.148
-    # without re-tuning will let the robot fall. See docs/retuning_guide_2026-05-16.md.
-    for name, ctrlrange in zip(CMD_SLIDER_NAMES, ("-1.0 1.0", "-3.0 3.0", "0.118 0.142", "0 1")):
+    # cmd_height range is kept inside the LUT's reachable interval.
+    # 2026-05-18: lower bound comes from the viewer-low posture used by
+    # the side-specific closed-chain LUT. Upper bound remains 0.142 because the
+    # current 2.2 kg tune oscillates above it; restoring 0.148 needs retuning.
+    for name, ctrlrange in zip(CMD_SLIDER_NAMES, ("-1.0 1.0", "-3.0 3.0", "0.07844 0.142", "0 1")):
         ET.SubElement(
             actuator,
             "motor",

@@ -1,17 +1,19 @@
 # TODO: macOS USB-CAN / 达妙电机调通
 
+> 当前代码状态（2026-05-18）：DMH6215 左右轮电机已切换为 MIT 模式；pair/group 保守测试均走 MIT 帧。非零命令硬限制为 `10 s`，实机冒烟仍建议先用 `0.1` 到 `0.5 s`。
+
 ## Phase 1: Offline Foundation
 
 - [x] Task 1: 对齐设备表与硬件配置
   - [x] 添加/确认 `dm_imu`
   - [x] 确认 DM4310 左右为 MIT
-  - [x] 修正 DMH6215 左右为 velocity
+  - [x] 修正 DMH6215 左右为 MIT
   - [x] 添加设备表测试
   - [x] 运行 `uv run pytest tests/test_devices.py`
 
 - [x] Task 2: 补齐协议 command builders
   - [x] 复用 enable/disable/MIT 编码
-  - [x] 使用 DMH6215 velocity frame
+  - [x] 使用 DMH6215 MIT frame
   - [x] 增加 group zero frame builder
   - [x] 测试 group zero 不产生 `0xFE`
   - [x] 运行 `uv run pytest tests/test_damiao_protocol.py`
@@ -65,10 +67,10 @@
   - [ ] 实机单电机 enable 后立即 disable
   - [ ] 记录反馈或 timeout
 
-- [x] Task 8: DMH6215 速度模式保守测试（离线/fake 验证）
+- [x] Task 8: DMH6215 MIT 保守速度目标测试（离线/fake 验证）
   - [x] 只允许 `dmh6215_left/right`
-  - [x] 使用速度模式零输出或保守小速度，不发送 torque 帧
-  - [x] duration 不超过 `0.5 s`
+  - [x] 使用 `kp=0`、小 `kd` 的 MIT 速度目标，不发送 torque 帧
+  - [x] 非零 duration 硬限制为 `10 s`
   - [x] 异常路径发送零输出
   - [ ] 实机先跑 `--wheel-velocity 0.2 --duration 0.3`
 
@@ -80,7 +82,7 @@
 - [ ] Checkpoint C: Single Device Hardware Ready
   - [ ] sniff 稳定
   - [ ] enable/disable 可用
-  - [ ] 单 DMH6215 速度模式安全退出
+  - [ ] 单 DMH6215 MIT 保守速度目标安全退出
   - [ ] IMU read 能运行到 duration 结束
 
 ## Phase 4: Four-Motor Vertical Slice
@@ -100,7 +102,7 @@
 
 - [x] Task 11: group conservative-test（离线/fake 验证）
   - [x] 内置 pre-zero
-  - [x] 默认 duration 不超过 `0.5 s`
+  - [x] 非零 duration 硬限制为 `10 s`
   - [x] DM4310 不默认拉绝对 0 位
   - [x] DMH6215 不发送 torque 帧
   - [x] 结束/异常都发送 group zero

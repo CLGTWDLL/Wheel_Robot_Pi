@@ -16,7 +16,7 @@
 3. 只读 sniff：`uv run python -m control.can_tool sniff --backend dm_usbcan --port <port> --serial-baud 921600 --can-bitrate 1000000 --duration 1.0`。
 4. 只读 IMU：`uv run python -m control.can_tool imu read --backend dm_usbcan --port <port> --serial-baud 921600 --can-bitrate 1000000 --duration 1.0`。
 5. 单电机 enable 后立即 disable，仅在机械安全和人员确认后执行；CLI `uv run python -m control.can_tool motor enable --backend dm_usbcan --port <port> --serial-baud 921600 --can-bitrate 1000000 --motor dm4310_left --duration 0.1` 是短暂 enable 后自动 disable 的冒烟命令，非持续使能工具。
-6. 现场确认 DMH6215 当前为 MIT 模式（2026-05-16 起）。零输出统一用 `mit_frame(motor)`（全 0 参数）；力矩测试可对 0x04/0x05 发送 `motor torque`，但务必使用保守上限（默认 ≤ 0.02 N·m，硬限制 ≤ 0.05 N·m）并确保人员安全。
+6. 现场确认 DMH6215 当前为 MIT 模式（2026-05-16 起）。零输出统一用 `mit_frame(motor)`（全 0 参数）；保守运动测试使用 `pair conservative-spin` 或 `group conservative-test`，不要把 `motor torque` 当作 MIT 电机的通用测试入口。
 7. 仅 0x02/0x04 双电机保守同步测试：仅在当前 CAN 总线确实只有 `0x02` 与 `0x04`，或已确认不会影响其他电机时，才运行 `uv run python -m control.can_tool pair conservative-spin --backend dm_usbcan --port <port> --serial-baud 921600 --can-bitrate 1000000 --duration 0.1 --period 0.05 --velocity 0.2 --wheel-velocity 0.2`。该命令针对 `0x02` 与 `0x04`，两台均走 MIT 帧 `arbitration_id = CAN_ID`，`0x04` 用 kp=0 + kd 阻尼跟踪 `wheel-velocity`；结束和异常路径会发送 pair zero（两台 MIT 全 0）并 disable 两台电机，反馈查看 MST `0x12`/`0x14`。
 8. group zero：确认四电机零输出帧，无异常后再考虑下一步。推荐命令：`uv run python -m control.can_tool group zero --backend dm_usbcan --port <port> --serial-baud 921600 --can-bitrate 1000000`。
 9. group conservative-test：仅使用默认保守参数，结束和异常路径都应回到 group zero。推荐命令：`uv run python -m control.can_tool group conservative-test --backend dm_usbcan --port <port> --serial-baud 921600 --can-bitrate 1000000`。
@@ -27,7 +27,7 @@
 
 ## 提高参数的人工确认
 
-默认测试力矩为 `0.02 N·m`，最大测试力矩硬限制为 `0.05 N·m`；4 台电机（含 0x04/0x05 DMH6215，2026-05-16 起 MIT 模式）均支持 `motor torque`，但务必保守。非零命令持续时间硬限制为 `0.5 s`。任何提高力矩/速度、延长持续时间、改变周期、改变 MIT 参数的动作，都必须先由现场人员确认机械状态、供电、急停和预期运动方向；不要在脚本中自动提高参数。
+pair/group 保守测试当前走 MIT 帧。`pair conservative-spin` 的 `--torque` 只作用在 `0x02 dm4310_left` 的 MIT torque feed-forward，默认保持 `0.0`；DMH6215 轮电机使用 `kp=0`、小 `kd` 的 MIT 速度目标。非零命令持续时间硬限制为 `10 s`，实机冒烟建议先用 `0.1` 到 `0.5 s`。任何提高力矩/速度、延长持续时间、改变周期、改变 MIT 参数的动作，都必须先由现场人员确认机械状态、供电、急停和预期运动方向；不要在脚本中自动提高参数。
 
 ## 测试日志模板
 

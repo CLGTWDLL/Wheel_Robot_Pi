@@ -1,5 +1,7 @@
 # macOS USB-CAN / 达妙电机调通计划
 
+> 当前代码状态（2026-05-18）：DMH6215 左右轮电机已切换为 MIT 模式；pair/group 保守测试均走 MIT 帧，DMH6215 不再使用速度模式帧。非零命令硬限制为 `10 s`，实机冒烟仍建议先用 `0.1` 到 `0.5 s`。
+
 ## Context
 
 目标是在 macOS 上通过已连接的达妙 USB-CAN 虚拟串口设备调通 4 个达妙电机和 DM-IMU：Python 负责 CLI、设备表、协议组织、安全限幅，并通过 `control/damiao_usbcan.py` 按达妙 USB-CAN 二进制协议收发 CAN 帧。第一阶段重点不是高性能控制，而是安全确认“4 个电机能否一起接收命令”，并保持测试参数保守。
@@ -7,9 +9,9 @@
 已读取并核对：
 
 - `SPEC.md`：已确认 Python 主入口、达妙 USB-CAN 虚拟串口二进制协议、保守 group 测试边界。
-- `CLAUDE.md`：硬件 CAN 配置：DM-IMU `0x01/0x11`，DM4310 左右 `0x02/0x12`、`0x03/0x13` MIT，DMH6215 左右 `0x04/0x14`、`0x05/0x15` 速度。
+- `AGENTS.md`：硬件 CAN 配置：DM-IMU `0x01/0x11`，DM4310 左右 `0x02/0x12`、`0x03/0x13` MIT，DMH6215 左右 `0x04/0x14`、`0x05/0x15` MIT。
 - `control/damiao_can/protocol.py`：已有 `CanFrame`、MIT 编码、enable/disable/zero-position、反馈解码、参数帧。
-- `control/damiao_can/motors.py`：已有 4 电机表，但 DMH6215 当前按 `velocity` 速度模式控制，不能改成 `torque`。
+- `control/damiao_can/motors.py`：已有 4 电机表，4 台电机当前均为 `mit`。
 - `pyproject.toml`：当前仅有 `mujoco` 依赖；后续可能需要 `pyserial`、`pytest`、`pybind11`。
 
 关键约束：
@@ -48,7 +50,7 @@ SPEC.md + CLAUDE.md
 - 设备表包含 `dm_imu`、`dm4310_left`、`dm4310_right`、`dmh6215_left`、`dmh6215_right`。
 - CAN_ID/MST_ID 与 `CLAUDE.md` 完全一致。
 - DM4310 模式为 `mit`。
-- DMH6215 模式保持 `velocity`。
+- DMH6215 模式为 `mit`。
 - 没有暴露参数保存、写 flash 或设零点的默认实机命令。
 
 验证：
@@ -63,7 +65,7 @@ SPEC.md + CLAUDE.md
 验收标准：
 
 - 继续复用 enable/disable/MIT 编码。
-- 使用 DMH6215 velocity-mode frame builder。
+- 使用 DMH6215 MIT frame builder。
 - `group zero` 生成 4 帧，顺序固定为 `dm4310_left`、`dm4310_right`、`dmh6215_left`、`dmh6215_right`。
 - `group zero` 明确不调用 `zero_position_frame`，不产生 `0xFE`。
 
@@ -79,7 +81,7 @@ SPEC.md + CLAUDE.md
 验收标准：
 
 - 非零 torque/运动命令没有 duration 时拒绝。
-- duration 默认不超过 `0.5 s`，越界拒绝或要求显式调整。
+- 非零 duration 硬限制为 `10 s`；实机冒烟建议先用 `0.1` 到 `0.5 s`。
 - torque 默认示例 `0.02–0.05 N·m`，硬上限 `0.05 N·m`。
 - NaN/inf 全部拒绝。
 - `motor torque` 只允许 torque-mode 电机。
@@ -166,16 +168,16 @@ Checkpoint B：确认能找到 USB-CAN 串口，确认设备真实协议，且�
 - fake bus 测试 enable/disable frame。
 - 实机单电机：`uv run python -m control.can_tool motor enable --port <PORT> --motor dm4310_left` 后立即 disable。
 
-#### Task 8 — DMH6215 速度模式保守测试
+#### Task 8 — DMH6215 MIT 保守速度目标测试
 
 改动目标：`control/can_tool.py`、`control/damiao_can/safety.py`、`control/damiao_can/commands.py`。
 
 验收标准：
 
-- 只允许 `dmh6215_left/right`。
-- 默认 torque 不超过 `0.05 N·m`，建议先用 `0.02 N·m`。
-- 默认 duration 不超过 `0.5 s`。
-- 执行顺序：零输出 -> enable -> 小 torque -> 零输出 -> disable/安全状态。
+- 只允许保守 MIT 速度目标。
+- DMH6215 使用 `kp=0`、小 `kd` 的 MIT 速度目标，不发送 torque 帧。
+- 非零 duration 硬限制为 `10 s`，实机冒烟建议先用 `0.1` 到 `0.5 s`。
+- 执行顺序：零输出 -> enable -> 小速度目标 -> 零输出 -> disable/安全状态。
 - Ctrl-C 或异常时仍发送零输出。
 
 验证：
@@ -199,7 +201,7 @@ Checkpoint B：确认能找到 USB-CAN 串口，确认设备真实协议，且�
 - `uv run python -m control.can_tool imu read --port <PORT> --duration 5.0`
 - fake bus 注入 IMU frame 测试。
 
-Checkpoint C：`sniff` 稳定、单电机 enable/disable 可用、单个 DMH6215 速度模式 能安全退出、IMU read 能运行到 duration 结束后，才进入 4 电机联动。
+Checkpoint C：`sniff` 稳定、单电机 enable/disable 可用、单个 DMH6215 MIT 保守速度目标能安全退出、IMU read 能运行到 duration 结束后，才进入 4 电机联动。
 
 ### Phase 4: 四电机保守联动
 
@@ -232,8 +234,8 @@ Checkpoint D：人工确认电机安全支撑、急停/断电可用、`group zer
 - 启动时提示必须先完成 `group zero`。
 - 命令自身内置 pre-zero。
 - DM4310 使用零输出或当前位姿低增益 hold；没有可靠反馈时不拉绝对 0 位。
-- DMH6215 使用速度模式零输出或保守小速度，不发送 torque 帧。
-- duration 默认不超过 `0.5 s`。
+- DMH6215 使用 MIT 零输出或保守小速度目标，不发送 torque 帧。
+- 非零 duration 硬限制为 `10 s`，实机冒烟建议先用 `0.1` 到 `0.5 s`。
 - 每个控制周期 4 帧同一 batch 发送，顺序固定。
 - 结束、异常、Ctrl-C 都发送 group zero，并尽量 disable。
 - 不自动重试或提高参数。
@@ -245,7 +247,7 @@ Checkpoint D：人工确认电机安全支撑、急停/断电可用、`group zer
 - 实机前必须通过 Checkpoint D。
 - 实机：`uv run python -m control.can_tool group conservative-test --port <PORT> --duration 0.5`
 
-Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可用、单电机可控、单 DMH6215 速度模式安全、`group zero` 可用、`group conservative-test` 在保守参数下可安全退出，且未写参数、未设零点、未使用激进参数。
+Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可用、单电机可控、单 DMH6215 MIT 保守速度目标安全、`group zero` 可用、`group conservative-test` 在保守参数下可安全退出，且未写参数、未设零点、未使用激进参数。
 
 ### Phase 5: 调试 runbook
 
@@ -256,7 +258,7 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 验收标准：
 
 - 写明实机前检查清单。
-- 写明推荐执行顺序：list-ports -> sniff/imu read -> 单电机 enable/disable -> 单 DMH6215 速度模式 -> group zero -> group conservative-test。
+- 写明推荐执行顺序：list-ports -> sniff/imu read -> 单电机 enable/disable -> 单 DMH6215 MIT 保守速度目标 -> group zero -> group conservative-test。
 - 明确 `group zero` 是零输出，不是设零点。
 - 明确如需提高参数必须人工确认。
 - 提供日志模板：time、port、serial baud、CAN bitrate、command、targets、feedback、abnormal behavior、final safety state。
@@ -290,13 +292,13 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 - [ ] Task 1: 对齐设备表与硬件配置
   - [ ] 添加/确认 `dm_imu`
   - [ ] 确认 DM4310 左右为 MIT
-  - [ ] 修正 DMH6215 左右为 velocity
+  - [ ] 修正 DMH6215 左右为 MIT
   - [ ] 添加设备表测试
   - [ ] 运行 `uv run pytest tests/test_devices.py`
 
 - [ ] Task 2: 补齐协议 command builders
   - [ ] 复用 enable/disable/MIT 编码
-  - [ ] 使用 DMH6215 velocity frame
+  - [ ] 使用 DMH6215 MIT frame
   - [ ] 增加 group zero frame builder
   - [ ] 测试 group zero 不产生 `0xFE`
   - [ ] 运行 `uv run pytest tests/test_damiao_protocol.py`
@@ -350,10 +352,10 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
   - [ ] 实机单电机 enable 后立即 disable
   - [ ] 记录反馈或 timeout
 
-- [ ] Task 8: DMH6215 速度模式保守测试
+- [ ] Task 8: DMH6215 MIT 保守速度目标测试
   - [ ] 只允许 `dmh6215_left/right`
-  - [ ] 默认 torque 建议 `0.02 N·m`，不超过 `0.05 N·m`
-  - [ ] duration 不超过 `0.5 s`
+  - [ ] 使用 `kp=0`、小 `kd` 的 MIT 速度目标
+  - [ ] 非零 duration 硬限制为 `10 s`
   - [ ] 异常路径发送零输出
   - [ ] 实机先跑 `--wheel-velocity 0.2 --duration 0.3`
 
@@ -365,7 +367,7 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 - [ ] Checkpoint C: Single Device Hardware Ready
   - [ ] sniff 稳定
   - [ ] enable/disable 可用
-  - [ ] 单 DMH6215 速度模式安全退出
+  - [ ] 单 DMH6215 MIT 保守速度目标安全退出
   - [ ] IMU read 能运行到 duration 结束
 
 ## Phase 4: Four-Motor Vertical Slice
@@ -384,7 +386,7 @@ Checkpoint E：核心目标完成条件：pytest 通过、list-ports/sniff 可�
 
 - [ ] Task 11: group conservative-test
   - [ ] 内置 pre-zero
-  - [ ] 默认 duration 不超过 `0.5 s`
+  - [ ] 非零 duration 硬限制为 `10 s`
   - [ ] DM4310 不默认拉绝对 0 位
   - [ ] DMH6215 不发送 torque 帧
   - [ ] 结束/异常都发送 group zero

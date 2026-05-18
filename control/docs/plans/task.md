@@ -1,3 +1,5 @@
+> 当前代码状态（2026-05-18）：本文件是历史 XML 时代的结构修复记录。当前仿真源是 `sim/robot/robot.urdf`，运行时由 `sim/model_xml.py` 生成并处理成 MJCF；不要用本文件里的 `轮腿v1/轮腿v1.xml` 路径判断当前仿真结构。
+
 | Step | Status | Notes |
 | --- | --- | --- |
 | Inspect AGENTS and robot pose source | completed | Root pose issue isolated to `robot_description/robot.xml` `base_link` world euler |

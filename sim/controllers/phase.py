@@ -54,13 +54,15 @@ class JumpPhaseMachine:
             self._set_phase(JumpPhase.FALLEN)
             return self.phase
 
-        if self.phase == JumpPhase.CROUCH and (
-            self.time_in_phase >= self.params.crouch_duration
-            or (
-                leg_height is not None
-                and leg_height <= self.params.crouch_target_height + self.params.crouch_height_tolerance
-            )
-        ):
+        if self.phase == JumpPhase.CROUCH and self.time_in_phase >= self.params.crouch_duration:
+            # Don't let leg_height shortcut CROUCH→EXTEND. The original check
+            # `leg_height <= crouch_target_height + tol` ended CROUCH as soon as
+            # the robot was "already low enough" — but if STAND was already at
+            # cmd_height < crouch_target_height (e.g. h=0.078), CROUCH ended
+            # instantly with zero duration, skipping the leg-pre-position the
+            # VMC clamp needs to drive θ into the LUT's reachable range before
+            # the 11.5 N·m extend feedforward kicks in. That blew the motor
+            # past LUT theta_max into the singular fully-extended pose.
             self._set_phase(JumpPhase.EXTEND)
         elif self.phase == JumpPhase.EXTEND and self.time_in_phase >= self.params.extend_duration and contact_count == 0:
             self._set_phase(JumpPhase.FLIGHT)

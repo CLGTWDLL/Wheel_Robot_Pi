@@ -6,6 +6,7 @@ logs/
 tmp/
 PixPin_*.mp4
 
+.worktree/
 .claude/worktrees/
 
 .venv/

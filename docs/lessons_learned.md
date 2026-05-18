@@ -1,5 +1,18 @@
 # 调试经验与已知问题
 
+## 当前代码状态（2026-05-18）
+
+本文件包含多轮历史调试记录。阅读旧章节前先以当前代码为准：
+
+- 仿真入口是 `sim/robot/robot.urdf`，运行时由 `sim/model_xml.py` 生成并处理成 MJCF。
+- 平衡 LQR 当前是 5D：`[pitch, pitch_rate, roll, roll_rate, wheel_vel]`，不含 `wheel_pos`。
+- `pitch_trim` 已删除，当前由 `equilibrium_pitch_from_geometry()` 按当前几何计算自然平衡 pitch。
+- JumpPhase 当前为 `STAND / CROUCH / EXTEND / FLIGHT / LAND / FALLEN`，没有 `RECOVER`。
+- 当前 VMC 是 `cmd_height -> LUT -> active motor angle target -> joint-space PID + gravity feedforward`，不使用 `qfrc_bias`。
+- 当前物理 actuator：轮子 `[-1.0, 1.0]`，腿部 MJCF `[-12.5, 12.5]`；`STAND` / `CROUCH` / `LAND` 阶段腿部软限制为 `[-3.5, 3.5]`。
+- 当前 `cmd_height` 运行时范围为 `[0.118, 0.142]`。
+- `STAND_THEN_DRIVE_PARAMS` 已按当前 5D LQR 参数替换，旧“不可用”记录只说明历史问题。
+
 ## 已解决: 机器人腿部塌陷
 
 **原问题**: 仿真中机器人腿部在 0.5s 内对称折叠，机体从初始高度 0.06m 垂直下沉穿过地面。
@@ -11,7 +24,7 @@
 
 **解决方案**:
 1. 根据电机手册将 ctrlrange 分离：轮子 [-1.0, 1.0]（DMH6215 额定 1Nm），腿 [-3.5, 3.5]（DM4310 额定 3.5Nm）
-2. VMC 添加 `qfrc_bias` 重力/科氏力补偿
+2. 历史版本曾添加 `qfrc_bias` 重力/科氏力补偿；当前 VMC 不再使用该路径
 3. **contype/conaffinity 位掩码分组**：base/link 碰撞代理 contype=2, conaffinity=1，轮子 contype=1, conaffinity=3。同组 contype=2 不互碰
 4. 200 轮自动优化 LQR/VMC 参数：kp=47, kd=11.3, Q=[1118,210,9.4,40.6], R=[0.86,4.57]
 
@@ -300,7 +313,7 @@
 2. 修改碰撞配置后必须用实际 launcher 参数验证, 不能只用脚本验证。
 3. 移除碰撞体是高风险操作, 优先用 friction=0 或 conaffinity 调整。
 
-### STAND_THEN_DRIVE_PARAMS 在修正 WHEEL_FORWARD_SIGNS 后不可用
+### STAND_THEN_DRIVE_PARAMS 在修正 WHEEL_FORWARD_SIGNS 后不可用（历史）
 
 **现象**: drive 场景启动后机器人弹飞 (z 飙升到 0.33), yaw 瞬间偏移 180°, 力矩全部打满 ±3.0。
 
@@ -308,9 +321,11 @@
 
 **临时修复**: drive 场景改用 STAND_PARAMS, 后续需要用 Optuna 重新优化。
 
+**当前状态**: `sim/controllers/default_params.py` 中的 `STAND_THEN_DRIVE_PARAMS` 已按当前 5D LQR 参数替换，旧 Optuna 参数不再是运行时默认值。
+
 ## 物理模型重构与控制算法参数修正
 
-### 平衡构型（鸟腿）的质心与姿态匹配
+### 平衡构型（鸟腿）的质心与姿态匹配（历史）
 
 **原问题**: 在修复了模型直立姿态（0.47m）后，LQR和参数优化程序仍旧频繁报错 `excessive_pitch` (pitch > 1.5)，且在仿真开始时车体弹射。
 **排查过程**:
@@ -321,6 +336,8 @@
 - LQR 默认目标平衡点 `pitch_trim` 设为 `0.26`
 - 优化器搜索空间 `pitch_trim` 缩小至 `[0.2, 0.32]`
 
+**当前状态**: `pitch_trim` 参数已删除，当前自然平衡 pitch 由 `equilibrium_pitch_from_geometry()` 计算。
+
 ### LQR 控制器增益符号：前馈控制符号反向
 
 **原问题**: LQR 在目标速度跟踪中发生正反馈摔倒。
@@ -329,6 +346,8 @@
 - `WHEEL_FORWARD_SIGNS` 对于两个电机统一设为 `-1.0`。
 - 将 `pitch_lean` 的合并方式改为相减（`pitch_trim - pitch_lean`），确保加速时降低目标 pitch (前倾)。
 - 在 `yaw_correction` 时，由于两轮基础符号已被统一，原先在两轮上的修正符号从 `(+1, -1)` 修正为 `(-1, +1)`，避免 yaw 的正反馈加速。
+
+**当前状态**: 当前代码使用 `equilibrium_pitch_from_geometry() + pitch_lean` 更新目标 pitch，`pitch_trim` 不再存在。
 
 ### LEG_EFFORT_SIGNS 两电机互相抵消（2026-05-05）
 
@@ -374,7 +393,7 @@
 
 **验证**: stand keyframe 下 wheel body `xipos.z` 与 wheel collision proxy `geom_xpos.z` 一致，误差约 `1e-8m`，因此当前实现使用 wheel body `xipos`。
 
-### 2026-05-13 (P3): LQR 扩展为 6D 并纳入 base roll
+### 2026-05-13 (P3): LQR 扩展为 6D 并纳入 base roll（历史）
 
 **变更**: LQR 状态从 `[pitch, pitch_rate, wheel_pos, wheel_vel]` 扩为 `[pitch, pitch_rate, roll, roll_rate, wheel_pos, wheel_vel]`。LQR 输出改为两个虚拟量: `forward_wheel` 和 `roll_diff_leg`。Yaw PI 仍只作用于轮子差速，VMC 仍只作用于腿部同向高度控制。
 
@@ -383,6 +402,8 @@
 **符号**: 短时仿真验证显示“左腿 +1Nm、右腿 -1Nm”会让 `roll` 朝负方向变化。因此虚拟 `roll_diff_leg > 0` 映射为左腿负、右腿正，并用测试固定。
 
 **结果**: `verify_cmd_height_tracking.py` 中 `max_abs_roll` 约 `0.0002rad`，roll 已进入 LQR 控制。
+
+**当前状态**: `CombinedController` 主路径已改为 5D LQR：`[pitch, pitch_rate, roll, roll_rate, wheel_vel]`。旧 6D 路径仍用于历史测试/对照，不是当前控制器主路径。
 
 ## 2026-05-05: 轮腿机器人对称性与控制问题排查
 1. **坐标系镜像的轴向量（Axial Vector）处理**：

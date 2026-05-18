@@ -19,13 +19,27 @@ import numpy as np
 from sim.controllers.combined import CombinedController
 from sim.controllers.default_params import STAND_PARAMS
 from sim.controllers.phase import JumpPhase, JumpPhaseMachine, JumpPhaseParams
-from sim.controllers.vmc import VmcController
+from sim.controllers.vmc import LEG_CLOSED_LOOP, VmcController
 from sim.gamepad import GamepadCommandMapper, GamepadDevice, open_gamepad
+from sim.model_semantics import MODEL_SEMANTICS
 from sim.model_xml import CMD_SLIDER_NAMES, prepare_controlled_mujoco_xml
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
 from sim.rollout import Controller, _clip_control, zero_controller
 from sim.state import actuator_id, extract_sim_state, model_addresses
 from sim.logger import setup_system_logger, TelemetryLogger, cleanup_old_logs
+
+# Joint groups for step-profile angle reporting. The two leg motor joints are
+# the critical signal for diagnosing the "jump from low height → leg blasts
+# into 5-bar singularity" failure: when EXTEND fires 11.5 N·m feed-forward
+# torque without enough contact load to lean against, θ exits the LUT's
+# monotonic range and the leg locks into a fully-extended pose that can no
+# longer push down for lift-off (see sim/controllers/vmc.py jump_height_min).
+LEG_MOTOR_JOINT_NAMES: tuple[str, ...] = tuple(MODEL_SEMANTICS.leg_motor_joints)
+PASSIVE_JOINT_NAMES: tuple[str, ...] = tuple(MODEL_SEMANTICS.passive_joints)
+WHEEL_JOINT_NAMES: tuple[str, ...] = tuple(MODEL_SEMANTICS.wheel_joints)
+LEG_MOTOR_SIDE_BY_JOINT: dict[str, str] = {
+    geom.motor_joint: side for side, geom in LEG_CLOSED_LOOP.items()
+}
 
 MANUAL_JUMP_PHASE_PARAMS = JumpPhaseParams(
     crouch_duration=0.20,
@@ -177,7 +191,12 @@ def create_controlled_controller(controller_name: str, scenario: str) -> Control
     params.vmc.crouch_duration = MANUAL_JUMP_PHASE_PARAMS.crouch_duration
     params.vmc.extend_offset = 0.03
     params.vmc.max_height_rate = 100.0
-    params.vmc.jump_extend_feedforward = 11.5
+    # 7.0 N·m gives a stable jump across the entire cmd_height range
+    # (0.078 / 0.110 / 0.142 all clear). 11.5 was tuned for nominal=0.142 and
+    # blows pitch past 1.5 rad when the leg starts low — the closed-chain W
+    # matrix is near-singular so two-side same-direction motor torques map
+    # almost entirely to base pitch wrench, not vertical thrust.
+    params.vmc.jump_extend_feedforward = 7.0
     params.vmc.jump_extend_feedforward_duration = MANUAL_JUMP_PHASE_PARAMS.extend_duration
 
     phase_machine = JumpPhaseMachine(MANUAL_JUMP_PHASE_PARAMS)
@@ -227,7 +246,44 @@ _STEP_PROFILE: dict[str, Any] = {
     "last_roll": 0.0,
     "last_pos_z": 0.0,
     "last_phase": None,
+    # Per-joint angle stats (rad). max_motor / min_motor cover both leg
+    # motor joints together — they are the critical signal for the
+    # extend-into-singularity failure mode.
+    "max_motor_angle": -float("inf"),
+    "min_motor_angle": float("inf"),
+    "last_motor_angles": {},
+    "last_passive_angles": {},
+    "last_wheel_angles": {},
+    "last_target_motor_angles": {},
 }
+
+
+def _read_joint_angles(model: Any, data: Any) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Return (leg_motor_angles, passive_angles, wheel_angles) in rad.
+
+    Read directly from data.qpos via cached addresses so the periodic step
+    profile can dump every joint angle without going through SimState (which
+    only exposes the two active motor angles).
+    """
+    addresses = model_addresses(model)
+    leg_motor = {name: float(data.qpos[addresses.joint_qpos[name]]) for name in LEG_MOTOR_JOINT_NAMES}
+    passive = {name: float(data.qpos[addresses.joint_qpos[name]]) for name in PASSIVE_JOINT_NAMES}
+    wheel = {name: float(data.qpos[addresses.joint_qpos[name]]) for name in WHEEL_JOINT_NAMES}
+    return leg_motor, passive, wheel
+
+
+def _read_target_motor_angles(controller: Controller) -> dict[str, float]:
+    """Pull the VMC's per-side LUT motor-angle setpoint, keyed by joint name."""
+    vmc = getattr(controller, "vmc_controller", controller)
+    cache = getattr(vmc, "_target_motor_angle_prev", None)
+    if not isinstance(cache, dict):
+        return {}
+    result: dict[str, float] = {}
+    for side, geometry in LEG_CLOSED_LOOP.items():
+        value = cache.get(side)
+        if value is not None:
+            result[geometry.motor_joint] = float(value)
+    return result
 
 
 def _record_step_profile(
@@ -241,8 +297,12 @@ def _record_step_profile(
     pitch: float,
     roll: float,
     pos_z: float,
+    leg_motor_angles: dict[str, float],
+    passive_angles: dict[str, float],
+    wheel_angles: dict[str, float],
+    target_motor_angles: dict[str, float],
 ) -> None:
-    """收集每步耗时与姿态，每 1.0 sim-second 或 phase 切换时打印一次。"""
+    """收集每步耗时、姿态与关节角，每 1.0 sim-second 或 phase 切换时打印一次。"""
     p = _STEP_PROFILE
     if p["bucket_start_sim_t"] is None:
         p["bucket_start_sim_t"] = sim_t
@@ -275,14 +335,44 @@ def _record_step_profile(
         p["max_abs_roll"] = abs_roll
     if pos_z < p["min_pos_z"]:
         p["min_pos_z"] = pos_z
+    for angle in leg_motor_angles.values():
+        if angle > p["max_motor_angle"]:
+            p["max_motor_angle"] = angle
+        if angle < p["min_motor_angle"]:
+            p["min_motor_angle"] = angle
     p["last_pitch"] = pitch
     p["last_roll"] = roll
     p["last_pos_z"] = pos_z
+    p["last_motor_angles"] = dict(leg_motor_angles)
+    p["last_passive_angles"] = dict(passive_angles)
+    p["last_wheel_angles"] = dict(wheel_angles)
+    p["last_target_motor_angles"] = dict(target_motor_angles)
 
     elapsed = sim_t - p["bucket_start_sim_t"]
     if elapsed >= 1.0 or phase_changed:
         n = max(p["count"], 1)
         reason = f"phase→{phase}" if phase_changed else "1s"
+        # Build per-side motor/target strings keyed by left/right so the leg
+        # motor angles are easy to scan when diagnosing the EXTEND singularity.
+        last_motor = p["last_motor_angles"]
+        last_target = p["last_target_motor_angles"]
+        motor_parts: list[str] = []
+        target_parts: list[str] = []
+        for joint_name, side in LEG_MOTOR_SIDE_BY_JOINT.items():
+            current = last_motor.get(joint_name, float("nan"))
+            target = last_target.get(joint_name)
+            motor_parts.append(f"{side}={current:+.3f}")
+            target_parts.append(
+                f"{side}={target:+.3f}" if target is not None else f"{side}=-"
+            )
+        passive_parts = [
+            f"{name}={angle:+.3f}" for name, angle in p["last_passive_angles"].items()
+        ]
+        wheel_parts = [
+            f"{name}={angle:+.3f}" for name, angle in p["last_wheel_angles"].items()
+        ]
+        max_motor = p["max_motor_angle"] if p["max_motor_angle"] != -float("inf") else float("nan")
+        min_motor = p["min_motor_angle"] if p["min_motor_angle"] != float("inf") else float("nan")
         print(
             f"[step-profile {reason}] sim_t={sim_t:.3f} n={p['count']} "
             f"ctrl avg/max={p['sum_ctrl']/n:.3f}/{p['max_ctrl']:.3f}ms "
@@ -290,7 +380,12 @@ def _record_step_profile(
             f"log avg/max={p['sum_log']/n:.3f}/{p['max_log']:.3f}ms "
             f"ncon_max={p['max_ncon']} "
             f"|pitch_max={p['max_abs_pitch']:.3f} roll_max={p['max_abs_roll']:.3f} z_min={p['min_pos_z']:.3f} "
-            f"|last p/r/z={p['last_pitch']:+.3f}/{p['last_roll']:+.3f}/{p['last_pos_z']:.3f}",
+            f"|last p/r/z={p['last_pitch']:+.3f}/{p['last_roll']:+.3f}/{p['last_pos_z']:.3f}\n"
+            f"  leg_motor[rad] last {' '.join(motor_parts)} "
+            f"| target {' '.join(target_parts)} "
+            f"| bucket min/max={min_motor:+.3f}/{max_motor:+.3f}\n"
+            f"  passive[rad] {' '.join(passive_parts)}\n"
+            f"  wheel[rad] {' '.join(wheel_parts)}",
             flush=True,
         )
         p["bucket_start_sim_t"] = sim_t
@@ -305,6 +400,8 @@ def _record_step_profile(
         p["max_abs_pitch"] = 0.0
         p["max_abs_roll"] = 0.0
         p["min_pos_z"] = float("inf")
+        p["max_motor_angle"] = -float("inf")
+        p["min_motor_angle"] = float("inf")
     if phase is not None:
         p["last_phase"] = phase
 
@@ -341,6 +438,9 @@ def step_controlled_model(
     mujoco.mj_step(model, data)
     t_step1 = time.perf_counter()
 
+    leg_motor_angles, passive_angles, wheel_angles = _read_joint_angles(model, data)
+    target_motor_angles = _read_target_motor_angles(controller)
+
     _record_step_profile(
         data.time,
         controller,
@@ -351,6 +451,10 @@ def step_controlled_model(
         pitch=float(state.pitch),
         roll=float(state.roll),
         pos_z=float(state.base_position[2]),
+        leg_motor_angles=leg_motor_angles,
+        passive_angles=passive_angles,
+        wheel_angles=wheel_angles,
+        target_motor_angles=target_motor_angles,
     )
 
     return bool(np.all(np.isfinite(data.qpos)) and np.all(np.isfinite(data.qvel)))
@@ -563,6 +667,21 @@ def main() -> None:
     system_logger.info(f"Starting launch_mujoco in mode: {args.mode}")
     system_logger.info(f"Scenario: {args.scenario}, Controller: {args.controller}")
     system_logger.info(f"XML Path: {args.xml}")
+
+    # Print the LUT motor-angle envelope so the per-bucket leg_motor[rad]
+    # lines are immediately interpretable: when θ approaches theta_max during
+    # EXTEND, the 5-bar is entering the singular fully-extended pose and the
+    # next FLIGHT/LAND is expected to collapse flat. jump_height_min sets the
+    # CROUCH/EXTEND/FLIGHT target_height floor; STAND can go below it because
+    # contact normal force constrains the linkage.
+    lut = STAND_PARAMS.vmc.lut
+    print(
+        f"[joint-diag] LUT theta_range=[{lut.theta_min:+.3f}, {lut.theta_max:+.3f}] rad "
+        f"h_range=[{lut.h_min:.3f}, {lut.h_max:.3f}] m "
+        f"jump_height_min={STAND_PARAMS.vmc.jump_height_min:.3f} m "
+        f"motor_joints=left:{LEG_CLOSED_LOOP['left'].motor_joint} right:{LEG_CLOSED_LOOP['right'].motor_joint}",
+        flush=True,
+    )
 
     import mujoco
     import mujoco.viewer
