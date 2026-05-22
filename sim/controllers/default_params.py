@@ -31,11 +31,6 @@ STAND_PARAMS = CombinedParams(
         land_kd_scale=2.5,
         gravity_compensation_scale=1.0,
         max_height_rate=0.05,
-        # 2026-05-17: 11.5 → 9.0 → 8.0。±1 N·m 轮扭矩不够压住落地冲击 pitch。
-        # 9.0 单跳能稳但双跳第二次落地超限 (pitch 0.160 触地 → 1.023 栽倒);
-        # 再降 11% 给落地多留 ~20% 安全边距。
-        jump_extend_feedforward=8.0,
-        jump_extend_feedforward_duration=0.05,
         roll_level_kp_height=0.0,
         roll_level_kd_height=0.0,
         roll_level_offset_limit=0.0,
@@ -46,6 +41,8 @@ STAND_PARAMS = CombinedParams(
     # 不再包含 wheel_pos。原 Q[4]=50 (wheel_pos) 已删除,原 Q[5]=500 (wheel_vel) 平移到 Q[4]。
     # 2026-05-18 删除 pitch_trim (改用 equilibrium_pitch_from_geometry 自动计算),
     # 加入位置外环参数 position_kp / position_velocity_limit。
+    # 2026-05-21 相位独占重构: LQR 在跳跃全程不输出 (CROUCH/EXTEND/FLIGHT/LAND),
+    # VMC 独占腿;轮力矩 = 0。删除 flight_wheel_q、jump_extend_feedforward (轨迹动态 FF 取代)。
     q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
     r_diag=np.array([200.0, 400.0]),
     velocity_ki=0.3,
@@ -57,7 +54,6 @@ STAND_PARAMS = CombinedParams(
     yaw_ki=0.0,
     fixed_height=False,
     lqr_height_bin_size=0.02,
-    flight_wheel_q=1.0,
     ff_gain=4.0,
 )
 
@@ -75,8 +71,6 @@ STAND_THEN_DRIVE_PARAMS = CombinedParams(
         landing_damping=0.628,
         land_kp_scale=0.5,
         land_kd_scale=2.5,
-        jump_extend_feedforward=9.0,
-        jump_extend_feedforward_duration=0.05,
         roll_level_kp_height=0.0,
         roll_level_kd_height=0.0,
         roll_level_offset_limit=0.0,
@@ -90,7 +84,6 @@ STAND_THEN_DRIVE_PARAMS = CombinedParams(
     position_velocity_limit=0.6,
     yaw_damping=0.5,
     yaw_ki=0.0,
-    flight_wheel_q=1.0,
 )
 
 # 跳跃相位机默认参数
@@ -115,8 +108,6 @@ def params_to_dict(params: CombinedParams) -> dict[str, Any]:
             "land_kd_scale": params.vmc.land_kd_scale,
             "gravity_compensation_scale": params.vmc.gravity_compensation_scale,
             "max_height_rate": params.vmc.max_height_rate,
-            "jump_extend_feedforward": params.vmc.jump_extend_feedforward,
-            "jump_extend_feedforward_duration": params.vmc.jump_extend_feedforward_duration,
             "roll_level_kp_height": params.vmc.roll_level_kp_height,
             "roll_level_kd_height": params.vmc.roll_level_kd_height,
             "roll_level_offset_limit": params.vmc.roll_level_offset_limit,
@@ -134,7 +125,6 @@ def params_to_dict(params: CombinedParams) -> dict[str, Any]:
         "target_yaw_rate": params.target_yaw_rate,
         "fixed_height": params.fixed_height,
         "lqr_height_bin_size": params.lqr_height_bin_size,
-        "flight_wheel_q": params.flight_wheel_q,
         "ff_gain": params.ff_gain,
     }
 
@@ -156,8 +146,6 @@ def params_from_dict(d: dict[str, Any]) -> CombinedParams:
             land_kd_scale=vmc_data.get("land_kd_scale", 2.5),
             gravity_compensation_scale=vmc_data.get("gravity_compensation_scale", 1.0),
             max_height_rate=vmc_data.get("max_height_rate", 0.1),
-            jump_extend_feedforward=vmc_data.get("jump_extend_feedforward", 0.0),
-            jump_extend_feedforward_duration=vmc_data.get("jump_extend_feedforward_duration", 0.0),
             roll_level_kp_height=vmc_data.get("roll_level_kp_height", 0.0),
             roll_level_kd_height=vmc_data.get("roll_level_kd_height", 0.0),
             roll_level_offset_limit=vmc_data.get("roll_level_offset_limit", 0.0),
@@ -175,7 +163,6 @@ def params_from_dict(d: dict[str, Any]) -> CombinedParams:
         target_yaw_rate=d.get("target_yaw_rate", 0.0),
         fixed_height=d.get("fixed_height", True),
         lqr_height_bin_size=d.get("lqr_height_bin_size", 0.02),
-        flight_wheel_q=d.get("flight_wheel_q", 1.0),
         ff_gain=d.get("ff_gain", 1.0),
     )
 

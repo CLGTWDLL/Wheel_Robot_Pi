@@ -105,6 +105,7 @@ def prepare_controlled_mujoco_xml(
     _replace_actuators(root)
     _ensure_equality_constraints(root)
     _add_connection_markers(root)
+    _stiffen_leg_motor_joint_limits(root)
     _ensure_standing_keyframe(root)
 
     output_path = output_root / f"{urdf_path.stem}_controlled.xml"
@@ -576,12 +577,27 @@ def _replace_actuators(root: ET.Element) -> None:
     root.append(actuator)
 
 
+def _stiffen_leg_motor_joint_limits(root: ET.Element) -> None:
+    """让 motor joint 的 range limit 变成接近硬限位。
+
+    默认 solreflimit (~0.02 1) 让 limit 是一种"软弹簧",冲量大时电机可以
+    瞬态越过 limit 几十毫弧度。EXTEND 阶段 7 N·m feedforward + 电机惯性
+    把 θ 推过 LUT.theta_max 进入奇异区,正是 URDF upper=0.60 设了也挡不住的
+    根因。这里把 solreflimit 调到 0.001 (~20× 更刚),solimplimit 调到接近
+    硬约束,让越界量降到几毫弧度内。
+    """
+    motor_joint_names = set(MODEL_SEMANTICS.leg_motor_joints)
+    for joint in root.iter("joint"):
+        if joint.get("name") in motor_joint_names:
+            joint.set("limited", "true")
+            joint.set("solreflimit", "0.001 1")
+            joint.set("solimplimit", "0.99 0.999 0.0001 0.5 2")
+
+
 def _ensure_equality_constraints(root: ET.Element) -> None:
     equality = root.find("equality")
     if equality is None:
         equality = ET.SubElement(root, "equality")
-
-    # Only add if not already present
     if equality.find("connect[@name='link23_left_connect']") is not None:
         return
 

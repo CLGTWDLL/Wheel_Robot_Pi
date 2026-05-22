@@ -53,21 +53,19 @@ class VmcParams:
     crouch_target_height: float = 0.09
     crouch_duration: float = 0.20
     extend_offset: float = 0.05
-    # CROUCH / EXTEND / FLIGHT target_height is clamped to ≥ jump_height_min.
+    # CROUCH / EXTEND target_height is clamped to ≥ jump_height_min.
     # Below this, the closed-chain motor PD has no contact normal force to lean
     # against (轮子离地或接触力很小), so dh/dθ enters the singular zone and
-    # 11.5 N·m extend feedforward drives θ past the LUT's monotonic range,
-    # producing the "leg fully extends into singularity" failure mode when
-    # jumping from a low STAND posture. STAND is unaffected — h=0.078 站立和
-    # 移动仍可达，因为接触力提供外部约束。
+    # extend feedforward drives θ past the LUT's monotonic range, producing
+    # the "leg fully extends into singularity" failure mode when jumping from
+    # a low STAND posture. STAND is unaffected — h=0.078 站立和移动仍可达，
+    # 因为接触力提供外部约束。
     jump_height_min: float = 0.118
     landing_damping: float = 1.0
     land_kp_scale: float = 0.5
     land_kd_scale: float = 2.5
     gravity_compensation_scale: float = 1.0
     max_height_rate: float = 0.1
-    jump_extend_feedforward: float = 0.0
-    jump_extend_feedforward_duration: float = 0.0
     roll_level_kp_height: float = 0.0
     roll_level_kd_height: float = 0.0
     roll_level_offset_limit: float = 0.0
@@ -125,8 +123,6 @@ class VmcController:
             self.params.land_kd_scale,
             self.params.gravity_compensation_scale,
             self.params.max_height_rate,
-            self.params.jump_extend_feedforward,
-            self.params.jump_extend_feedforward_duration,
             self.params.roll_level_kp_height,
             self.params.roll_level_kd_height,
             self.params.roll_level_offset_limit,
@@ -148,44 +144,100 @@ class VmcController:
             )
             phase = self.phase_machine.phase
 
+        # FLIGHT: 用对称腿电机做 pitch_rate 反作用阻尼。
+        # 物理依据: 电机力矩 τ 给腿 → Newton 3rd 给 base 反作用 -τ (绕 pitch 轴)。
+        # 左右两个电机同向施加 τ → base 受 -2τ 的 pitch 力矩,可主动减速 pitch_rate。
+        # (旧实现返回 0 是"干净"但起跳后 pitch_rate 累积 -4 rad/s,250ms 飞行翻 1 rad)
+        #
+        # 注意: 必须严格对称 (左右同 τ),否则会产生 roll 力矩。
+        # 不对 height/位置做反馈 (legs 在空中无 ground reaction,kp 没意义);
+        # 只做 pitch_rate 一维阻尼。
+        # FALLEN: 完全 0,不再控制。
+        if phase == JumpPhase.FALLEN:
+            self.last_target_motor_rate = {side: 0.0 for side in LEG_CLOSED_LOOP}
+            return np.zeros(model.nu)
+        if phase == JumpPhase.FLIGHT:
+            self.last_target_motor_rate = {side: 0.0 for side in LEG_CLOSED_LOOP}
+            trajectory = self.phase_machine.trajectory if self.phase_machine is not None else None
+            lock_height = float(trajectory.h_high) if trajectory is not None else float(self.params.nominal_height)
+            self.last_target_heights = {side: lock_height for side in LEG_CLOSED_LOOP}
+            # 空中姿态: 仅 pitch_rate 阻尼 (PD 加 K_p 位置项会发散 — 见下方注释)。
+            # τ_motor = -K_d * pitch_rate,两腿对称 → base 受反作用力矩。
+            # 经验值 K_d=1.5,limit ±3.5: pitch_rate 在 ~30ms 内被压到 ~0,
+            # 但残留 pitch 不归零 (无位置项)。
+            #
+            # 增大 K_d (e.g. 3.0 + ±10 limit) 让 pitch 反而漂移到 0.6 rad — 推测是
+            # 大力矩快速摆动 leg 反向,leg 角动量回流到 body 把 pitch 推到一边。
+            #
+            # 加 K_p * pitch (任意符号) 也发散到 0.6+ rad — 5-bar linkage 把电机力矩
+            # 传到 body 的耦合方向是 nonlinear/configuration-dependent,简单 PD 失效。
+            #
+            # 当前保守值 K_d=1.5 是实测在 [-0.05, -0.20] rad pitch drift 间最稳的。
+            pitch_kd = 1.5   # N·m per (rad/s)
+            attitude_torque = float(np.clip(
+                -pitch_kd * float(state.pitch_rate), -3.5, 3.5,
+            ))
+            addresses = model_addresses(model)
+            control = np.zeros(model.nu)
+            for geometry in LEG_CLOSED_LOOP.values():
+                act_idx = addresses.actuators[geometry.motor_joint]
+                lo, hi = model.actuator_ctrlrange[act_idx]
+                control[act_idx] = float(np.clip(attitude_torque, lo, hi))
+            return control
+
         target_height = self._filtered_nominal_height(float(model.opt.timestep))
+        target_h_dot = 0.0   # 期望 CoM 垂直速度,用于 motor velocity FF
+        target_h_ddot = 0.0  # 期望 CoM 垂直加速度,用于动态 thrust FF
         kp_motor = self.params.kp_motor
         kd_motor = self.params.kd_motor
-        if phase == JumpPhase.CROUCH:
-            if self._crouch_start_height is None:
-                self._crouch_start_height = current_leg_height
-            duration = max(float(self.params.crouch_duration), float(model.opt.timestep))
-            progress = float(np.clip(self.phase_machine.time_in_phase / duration if self.phase_machine else 1.0, 0.0, 1.0))
-            blend = progress**3 * (10.0 - 15.0 * progress + 6.0 * progress * progress)
-            target_height = (1.0 - blend) * self._crouch_start_height + blend * self.params.crouch_target_height
-            target_height = max(target_height, float(self.params.jump_height_min))
-        elif phase == JumpPhase.EXTEND:
-            self._crouch_start_height = None
-            target_height += self.params.extend_offset
-            target_height = max(target_height, float(self.params.jump_height_min) + float(self.params.extend_offset))
-        elif phase == JumpPhase.FLIGHT:
-            # 飞行中预收腿到 crouch 高度：缩短 pendulum length，落地冲击转化的
-            # pitch 力矩与 L 成正比；同时给 LAND 阶段留出腿伸展行程吸收冲击。
-            self._crouch_start_height = None
-            target_height = self.params.crouch_target_height
-            target_height = max(target_height, float(self.params.jump_height_min))
-        elif phase == JumpPhase.LAND:
-            self._crouch_start_height = None
+        trajectory = self.phase_machine.trajectory if self.phase_machine is not None else None
+
+        if phase == JumpPhase.CROUCH and trajectory is not None:
+            t = self.phase_machine.time_in_phase  # type: ignore[union-attr]
+            target_height = trajectory.crouch.height(t)
+            target_h_dot = trajectory.crouch.velocity(t)
+            target_h_ddot = trajectory.crouch.acceleration(t)
+        elif phase == JumpPhase.EXTEND and trajectory is not None:
+            t = self.phase_machine.time_in_phase  # type: ignore[union-attr]
+            extend_duration = float(trajectory.extend.duration)
+            target_height = trajectory.extend.height(t)
+            target_h_dot = trajectory.extend.velocity(t)
+            target_h_ddot = trajectory.extend.acceleration(t)
+            if t <= extend_duration:
+                # 跟轨迹: 1.5x kp/kd 跟踪轨迹位置。不能更高: 3x kp + 50ms 内
+                # 快速变化的 target → motor 振荡 ±20 N·m 把执行器顶到饱和。
+                kp_motor *= 1.5
+                kd_motor *= 1.5
+            else:
+                # 轨迹跑完但相位机还在 EXTEND (弹跳确认期/能量补推): 关闭位置 kp,
+                # 只保留速度跟踪 + ff_torque (= m*(g+a)/N * dh/dθ)。
+                #
+                # 为什么必须关 kp: ConstantAccelerationTrajectory 在 t>duration 后
+                # height 被 clip 到 h_high (常数)。但 motor θ 因为 ff_torque 持续推
+                # + body 上升动量,会过冲到对应 h>h_high 的角度。kp*(θ_target-θ_current)
+                # 变成负的 → PID 主动把 motor 拉回 → body vz 从 1.5 m/s 在 2ms 内
+                # 掉到 0.9 (实测),起跳能量被 PID 自己浪费在 ground bounce 上。
+                # ff_torque 是恒定加速度 profile 的正确推力,留它继续推就行。
+                kp_motor = 0.0
+                kd_motor *= 1.5
+        elif phase == JumpPhase.LAND and trajectory is not None:
+            # 入 LAND 瞬间生成 land 轨迹。h_target 传入当前 nominal_height
+            # 而不是默认 0.142,这样落地不会强行伸腿到中位然后立刻收回。
+            if trajectory.land is None:
+                trajectory.setup_land(
+                    h_contact=current_leg_height,
+                    v_contact=float(state.base_linear_velocity[2]),
+                    h_target=float(self.params.nominal_height),
+                )
+            t = self.phase_machine.time_in_phase  # type: ignore[union-attr]
+            assert trajectory.land is not None
+            target_height = trajectory.land.height(t)
+            target_h_dot = trajectory.land.velocity(t)
+            target_h_ddot = trajectory.land.acceleration(t)
+            # LAND PD 加阻尼吸收冲击
             kp_motor *= self.params.land_kp_scale
             kd_motor = kd_motor * self.params.land_kd_scale + self.params.landing_damping
-            # Avoid yanking the leg back to a low cmd_height the instant we touch
-            # down. After lift-off θ sits near LUT.theta_max; if target_height is
-            # 0.078 we get a 0.4 rad PID step which slams the body into a pitch
-            # spike. Clamp to jump_height_min and let STAND walk back down once
-            # the body has stabilized.
-            target_height = max(target_height, float(self.params.jump_height_min))
-        elif phase == JumpPhase.FALLEN:
-            self._crouch_start_height = None
-            self.last_target_motor_rate = {side: 0.0 for side in LEG_CLOSED_LOOP}
-            self.last_target_heights = {side: 0.0 for side in LEG_CLOSED_LOOP}
-            return np.zeros(model.nu)
-        else:
-            self._crouch_start_height = None
+        # STAND: 用 filtered nominal_height,target_h_ddot=0 (静态保持)
 
         control = np.zeros(model.nu)
         addresses = model_addresses(model)
@@ -221,50 +273,45 @@ class VmcController:
 
             theta_current = float(data.qpos[motor_qpos_idx])
             theta_rate = float(data.qvel[motor_qvel_idx])
-            pid_torque = kp_motor * (target_motor_angle - theta_current) - kd_motor * theta_rate
+            # 速度前馈: 把 trajectory 的期望 ḣ 映射到 motor 角速度,
+            #   target_motor_rate = ḣ_target / (dh/dθ).
+            # 没有 FF 的话 kd_motor 项 (-kd * θ_rate) 会刹住任何 motor 运动,
+            # 与 trajectory 的速度需求相对抗,EXTEND 推不动。
+            jacobian_side = jacobian[side]
+            if abs(jacobian_side) > LEG_JACOBIAN_SINGULAR_VALUE_EPS:
+                target_motor_rate = target_h_dot / jacobian_side
+            else:
+                target_motor_rate = 0.0
+            pid_torque = (
+                kp_motor * (target_motor_angle - theta_current)
+                + kd_motor * (target_motor_rate - theta_rate)
+            )
 
             if phase == JumpPhase.FLIGHT:
-                gravity_torque = 0.0
+                # 不会到达 (FLIGHT 已在函数顶部早返回),此分支只为防御性兜底。
+                ff_torque = 0.0
             else:
-                gravity_torque = (
+                # 动态前馈: 跟踪轨迹的期望加速度 ḧ_target。
+                #   总 thrust = m_total * (g + ḧ_target)
+                #   每腿 τ_ff = (dh/dθ) * thrust / N_legs
+                # ḧ_target=0 时退化为标准重力补偿 (m*g*dh/dθ/N)。
+                ff_torque = (
                     jacobian[side]
                     * total_mass
-                    * gravity
+                    * (gravity + target_h_ddot)
                     / len(LEG_CLOSED_LOOP)
                     * self.params.gravity_compensation_scale
                 )
 
-            if phase == JumpPhase.EXTEND:
-                # Apply the extend feedforward boost only while θ is below the
-                # extend target. Once we've reached LUT(target_height), let the
-                # PID hold position — without this gate, 11.5 N·m runs the full
-                # extend_duration regardless of how short the θ travel is, and
-                # the closed chain blows past LUT.theta_max into the singular
-                # fully-extended pose, which is exactly the "leg snaps straight
-                # and falls" failure seen from low cmd_height jumps.
-                if target_motor_angle - theta_current > 0:
-                    extend_torque = self.params.jump_extend_feedforward
-                else:
-                    extend_torque = pid_torque
-                control[act_idx] = gravity_torque + extend_torque
-            else:
-                control[act_idx] = gravity_torque + pid_torque
+            control[act_idx] = ff_torque + pid_torque
 
         clipped = np.clip(control, model.actuator_ctrlrange[:, 0], model.actuator_ctrlrange[:, 1])
         if phase in (JumpPhase.STAND, JumpPhase.CROUCH, JumpPhase.LAND):
             for geometry in LEG_CLOSED_LOOP.values():
                 act_idx = addresses.actuators[geometry.motor_joint]
                 clipped[act_idx] = float(np.clip(clipped[act_idx], -3.5, 3.5))
-        elif phase == JumpPhase.FLIGHT:
-            # 飞行中两腿 motor 力矩通过近奇异 W 矩阵 [[0.182,0.182],[-8.77,-8.77]]
-            # 转化为 base wrench 时，pitch 系数比 thrust 系数大约 48×。两腿
-            # 同向 PID 力矩（FLIGHT 想把 motor 从 EXTEND 末位 +0.59 拉回 target
-            # +0.27 → 双 PID ≈ -9.5 N·m）会在空中产生巨大 base pitch torque，
-            # 让机器人翻转。严格 clip 到 ±1 N·m 保留少量 D-damping 让 motor
-            # 不发散，但不足以把 base 旋转起来。
-            for geometry in LEG_CLOSED_LOOP.values():
-                act_idx = addresses.actuators[geometry.motor_joint]
-                clipped[act_idx] = float(np.clip(clipped[act_idx], -1.0, 1.0))
+        # EXTEND: 不做 ±3.5 二次 clip,允许动态 FF 拉满到 actuator ±12.5 推起跳。
+        # FLIGHT: 已在函数顶部早返回,不会进入此分支。
         if not np.all(np.isfinite(clipped)):
             raise ValueError("VMC control must be finite")
         return clipped

@@ -18,6 +18,8 @@ from sim.controllers.balance_lqr import (
 from sim.controllers.balance_state import balance_tangent_state_6d
 from sim.controllers.combined import CombinedController
 from sim.controllers.default_params import STAND_PARAMS
+from sim.controllers.phase import JumpPhase, JumpPhaseMachine
+from sim.controllers.jump_trajectory import JumpTrajectory, JumpTrajectoryParams
 from sim.model_semantics import MODEL_SEMANTICS, WHEEL_FORWARD_SIGNS, WHEEL_RADIUS
 from sim.model_xml import prepare_controlled_mujoco_xml
 from sim.state import extract_sim_state, model_addresses
@@ -129,6 +131,7 @@ def test_reduced_balance_system_matches_roll_formula(tmp_path: Path) -> None:
 
 
 def test_vmc_mean_and_lqr_roll_diff_are_added_orthogonally(tmp_path: Path) -> None:
+    """STAND 模式下 VMC 共模腿力矩与 LQR roll diff 在 leg motor 上线性相加。"""
     model, _data = _stand_model(tmp_path)
     addresses = model_addresses(model)
     controller = CombinedController(STAND_PARAMS)
@@ -137,7 +140,10 @@ def test_vmc_mean_and_lqr_roll_diff_are_added_orthogonally(tmp_path: Path) -> No
     vmc_control[addresses.actuators[left_leg]] = 3.0
     vmc_control[addresses.actuators[right_leg]] = 3.0
 
-    control = controller._assemble_and_clip_control(model, 0.0, 0.0, 0.5, vmc_control, addresses)
+    # _allocate_balance_control 写 LQR 部分 (forward + roll + yaw),_merge_vmc_and_clip
+    # 把 VMC 共模力矩加到 leg motor 上并按相位 clip。STAND clip = ±3.5。
+    lqr_part = controller._allocate_balance_control(model, 0.0, 0.5, 0.0, addresses)
+    control = controller._merge_vmc_and_clip(model, lqr_part, vmc_control, addresses, JumpPhase.STAND)
 
     assert np.isclose(control[addresses.actuators[left_leg]], 2.5)
     assert np.isclose(control[addresses.actuators[right_leg]], 3.5)
@@ -150,7 +156,7 @@ def test_positive_roll_virtual_torque_matches_measured_short_step_direction(tmp_
     stand_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "stand")
     before = extract_sim_state(model, data)
 
-    control = controller._allocate_lqr_control(model, 0.0, 1.0, addresses)
+    control = controller._allocate_balance_control(model, 0.0, 1.0, 0.0, addresses)
     for _ in range(5):
         data.ctrl[:] = 0.0
         for joint_name in MODEL_SEMANTICS.leg_motor_joints:
@@ -161,3 +167,67 @@ def test_positive_roll_virtual_torque_matches_measured_short_step_direction(tmp_
     after = extract_sim_state(model, data)
     assert stand_id >= 0
     assert after.roll - before.roll > 0.0
+
+
+def test_airborne_zero_wheel_forward_torque_regardless_of_phase(tmp_path: Path) -> None:
+    """contact_count==0 时,LQR 不应在两轮上产生同向 forward 力矩。
+
+    背景: 空中无地面阻尼,持续轮力矩会把轮子加速到 50+ rad/s。重新接地瞬间
+    这股切向速度通过滑动摩擦在 CoM 之下产生反向 pitch 反扭,把车架掀翻
+    (2026-05-20 run 失败原因)。失败场景不仅是 FLIGHT 相位本身,还包括 LAND
+    期间弹跳短暂离地 → 故按"是否接地"判定。
+
+    本测试钉死:
+        contact_count=0 时 LQR forward torque = 0 (即使 phase=LAND 或 STAND);
+        contact_count>0 时 LQR forward torque 应非零 (基线 sanity).
+    """
+    from dataclasses import replace
+
+    model, data = _stand_model(tmp_path)
+    addresses = model_addresses(model)
+    phase_machine = JumpPhaseMachine()
+    controller = CombinedController(STAND_PARAMS, phase_machine=phase_machine)
+
+    base_state = extract_sim_state(model, data)
+    left_wheel, right_wheel = MODEL_SEMANTICS.wheel_joints
+
+    def forward_mean(control: np.ndarray) -> float:
+        left = control[addresses.actuators[left_wheel]] * WHEEL_FORWARD_SIGNS[left_wheel]
+        right = control[addresses.actuators[right_wheel]] * WHEEL_FORWARD_SIGNS[right_wheel]
+        return 0.5 * (left + right)
+
+    # 1) 接地基线: pitch 误差应该驱动非零 forward torque
+    grounded = replace(base_state, pitch=0.1, pitch_rate=0.0, contact_count=2)
+    phase_machine.phase = JumpPhase.STAND
+    grounded_forward = forward_mean(controller(model, data, grounded))
+    assert abs(grounded_forward) > 0.05, (
+        f"baseline sanity: grounded with pitch error should drive forward torque, got {grounded_forward}"
+    )
+
+    # 2) 空中 (FLIGHT): 同样的 pitch 误差应被钳到 0
+    in_air_velocity = base_state.base_linear_velocity.copy()
+    in_air_velocity[2] = 1.0  # 让 phase_machine 不会立刻从 FLIGHT 跳成 LAND
+    airborne = replace(
+        base_state,
+        pitch=0.1,
+        pitch_rate=0.0,
+        base_linear_velocity=in_air_velocity,
+        contact_count=0,
+    )
+    traj = JumpTrajectory(JumpTrajectoryParams(), h_start=0.142, cmd_jump_amplitude=1.0)
+    phase_machine.start_jump(traj)
+    phase_machine.phase = JumpPhase.FLIGHT
+    flight_forward = forward_mean(controller(model, data, airborne))
+    assert flight_forward == 0.0, (
+        f"FLIGHT (contact=0) must zero forward wheel torque, got {flight_forward}"
+    )
+
+    # 3) LAND 期间弹跳离地 (contact=0 但 phase=LAND): 同样应钳到 0
+    # 这一案例覆盖 2026-05-20 用户 run 的真实失败模式: 第二次跳的 LAND 阶段
+    # 多次 contact=0/2 振荡,期间 LQR 把轮速从 +37 推到 -433 rad/s 直接掀翻。
+    traj.setup_land(h_contact=0.10, v_contact=-0.5, h_target=0.142)
+    phase_machine.phase = JumpPhase.LAND
+    land_airborne_forward = forward_mean(controller(model, data, airborne))
+    assert land_airborne_forward == 0.0, (
+        f"LAND bounce (contact=0) must zero forward wheel torque, got {land_airborne_forward}"
+    )

@@ -24,7 +24,6 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
         target_yaw_rate=0.78,
         fixed_height=True,
         lqr_height_bin_size=0.09,
-        flight_wheel_q=1.2,
         ff_gain=4.5,
     )
     params.vmc.crouch_target_height = 0.091
@@ -50,7 +49,6 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
     assert restored.target_yaw_rate == params.target_yaw_rate
     assert restored.fixed_height is params.fixed_height
     assert restored.lqr_height_bin_size == params.lqr_height_bin_size
-    assert restored.flight_wheel_q == params.flight_wheel_q
     assert restored.ff_gain == params.ff_gain
     assert restored.vmc.crouch_target_height == params.vmc.crouch_target_height
     assert restored.vmc.crouch_duration == params.vmc.crouch_duration

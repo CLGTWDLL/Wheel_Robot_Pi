@@ -28,10 +28,15 @@ def _stand_model(tmp_path: Path) -> tuple[mujoco.MjModel, mujoco.MjData]:
 
 
 def test_equilibrium_pitch_matches_geometry(tmp_path: Path) -> None:
-    """stand keyframe 下,几何稳态 pitch 应在 -0.172 rad 附近(CoM 相对 wheel_mid 在 +Y 方向偏 ~12 mm)。"""
+    """stand keyframe 下,几何稳态 pitch 应在 -0.148 rad 附近。
+
+    2026-05-19: base_link inertial Y 由 0.00435 调到 0.000247 (~-4mm),
+    让 LUT 配置 h=0.142 处 pitch_eq≈0。stand keyframe 的电机角 0.752 在
+    LUT 范围 (theta_max=0.65) 之外,腿姿不同,所以这里残留 -0.148 rad。
+    """
     model, data = _stand_model(tmp_path)
     pitch_eq = equilibrium_pitch_from_geometry(model, data)
-    assert pitch_eq == pytest.approx(-0.172, abs=0.005)
+    assert pitch_eq == pytest.approx(-0.148, abs=0.005)
 
 
 def test_equilibrium_pitch_invariant_under_base_rotation(tmp_path: Path) -> None:

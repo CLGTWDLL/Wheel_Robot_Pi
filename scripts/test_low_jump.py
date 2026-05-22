@@ -46,8 +46,6 @@ def run(nominal_height: float, duration: float = 4.0, jump_delay: float = 1.0) -
     params.vmc.crouch_duration = 0.20
     params.vmc.extend_offset = 0.03
     params.vmc.max_height_rate = 100.0
-    params.vmc.jump_extend_feedforward = 7.0
-    params.vmc.jump_extend_feedforward_duration = 0.05
 
     phase_params = JumpPhaseParams(
         crouch_duration=0.20, crouch_target_height=0.09,

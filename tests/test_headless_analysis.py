@@ -94,9 +94,11 @@ def _run_synchronized_position_rollout(
 
 def test_synchronized_leg_position_actuators_do_not_need_right_gear_compensation(tmp_path: Path) -> None:
     model, data = _build_position_model(tmp_path)
-    left_history, right_history = _run_synchronized_position_rollout(model, data, ctrl_value=1.0)
+    # ctrl=0.3 远在 motor joint upper=+0.60 之内,避开限位反弹引入的瞬态不对称。
+    # 较小目标值也避免无阻尼 position 控制器 overshoot 时撞到限位。
+    left_history, right_history = _run_synchronized_position_rollout(model, data, ctrl_value=0.3)
 
-    assert np.all(data.ctrl == 1.0)
+    assert np.all(data.ctrl == 0.3)
     assert np.max(np.abs(left_history[:, 0] - right_history[:, 0])) < 0.02
 
 

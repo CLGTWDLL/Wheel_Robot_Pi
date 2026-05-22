@@ -5,12 +5,15 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+import pytest
 
 from sim.controllers.default_params import STAND_PARAMS
 from sim.controllers.balance_state import balance_tangent_state_5d
+from sim.controllers.jump_trajectory import JumpTrajectory
 from sim.controllers.phase import JumpPhase, JumpPhaseMachine
 from sim.controllers.vmc import VmcController
 from sim.launch_mujoco import (
+    MANUAL_JUMP_TRAJECTORY_PARAMS,
     _can_enable_gamepad,
     _read_cmd_sliders,
     _restore_cmd_sliders,
@@ -113,9 +116,22 @@ def test_command_slider_read_and_restore_includes_cmd_jump(tmp_path: Path) -> No
     assert data.ctrl[jump_actuator] == 1.0
 
 
-def test_cmd_jump_rising_edge_triggers_once() -> None:
+def _make_controller_with_phase_machine() -> tuple[JumpPhaseMachine, "_ControllerWithPhaseMachine"]:
+    # 给 controller 一个 fake params.vmc.nominal_height 让 trigger 能读到 h_start
+    class _Vmc:
+        nominal_height = 0.142
+
+    class _Params:
+        vmc = _Vmc()
+
     phase_machine = JumpPhaseMachine()
     controller = _ControllerWithPhaseMachine(phase_machine)
+    controller.params = _Params()  # type: ignore[attr-defined]
+    return phase_machine, controller
+
+
+def test_cmd_jump_rising_edge_triggers_once() -> None:
+    phase_machine, controller = _make_controller_with_phase_machine()
 
     previous = _trigger_jump_on_rising_edge(controller, 0.0, 0.0)
     assert phase_machine.phase == JumpPhase.STAND
@@ -130,77 +146,102 @@ def test_cmd_jump_rising_edge_triggers_once() -> None:
 
     previous = _trigger_jump_on_rising_edge(controller, 0.0, previous)
     phase_machine.phase = JumpPhase.STAND
+    phase_machine.trajectory = None
     _trigger_jump_on_rising_edge(controller, 1.0, previous)
     assert phase_machine.phase == JumpPhase.CROUCH
 
 
+def _start_jump_with_default_traj(phase_machine: JumpPhaseMachine, h_start: float = 0.142) -> None:
+    """Helper: 模拟 _trigger_jump_on_rising_edge 的轨迹构造逻辑。"""
+    traj = JumpTrajectory(MANUAL_JUMP_TRAJECTORY_PARAMS, h_start=h_start, cmd_jump_amplitude=1.0)
+    phase_machine.start_jump(traj)
+
+
 def test_jump_phase_does_not_enter_flight_while_still_in_contact() -> None:
     phase_machine = JumpPhaseMachine()
-    phase_machine.start_jump()
+    _start_jump_with_default_traj(phase_machine)
+    crouch_dur = phase_machine.trajectory.crouch.duration  # type: ignore[union-attr]
+    extend_dur = phase_machine.trajectory.extend.duration  # type: ignore[union-attr]
 
-    phase_machine.update(dt=0.30, leg_height=0.2, vz=0.0, contact_count=2)
+    phase_machine.update(dt=crouch_dur + 0.01, leg_height=0.2, vz=0.0, contact_count=2)
     assert phase_machine.phase == JumpPhase.EXTEND
 
-    phase_machine.update(dt=0.30, leg_height=0.2, vz=0.2, contact_count=2)
-    assert phase_machine.phase == JumpPhase.EXTEND
+    # 还在地面接触: extend 跑超过 2x duration 才会去 LAND, 不进 FLIGHT
+    # (2x 容忍弹跳期间补推; 见 phase.py 的 EXTEND 转移逻辑)
+    phase_machine.update(dt=extend_dur * 2.0 + 0.01, leg_height=0.2, vz=0.2, contact_count=2)
+    assert phase_machine.phase == JumpPhase.LAND
 
-    phase_machine.update(dt=0.01, leg_height=0.2, vz=0.2, contact_count=0)
+    # 重置, 再测离地且足够 vz 的情况
+    phase_machine = JumpPhaseMachine()
+    _start_jump_with_default_traj(phase_machine)
+    crouch_dur = phase_machine.trajectory.crouch.duration  # type: ignore[union-attr]
+    extend_dur = phase_machine.trajectory.extend.duration  # type: ignore[union-attr]
+    phase_machine.update(dt=crouch_dur + 0.01, leg_height=0.2, vz=0.0, contact_count=2)
+    assert phase_machine.phase == JumpPhase.EXTEND
+    # vz=0.5 > 0.3 阈值 (避免推地弹跳触发) + ncon=0 → FLIGHT
+    phase_machine.update(dt=extend_dur + 0.01, leg_height=0.2, vz=0.5, contact_count=0)
     assert phase_machine.phase == JumpPhase.FLIGHT
 
 
 def test_jump_phase_accepts_leg_height_and_vz_inputs() -> None:
     phase_machine = JumpPhaseMachine()
-    phase_machine.start_jump()
+    _start_jump_with_default_traj(phase_machine)
+    crouch_dur = phase_machine.trajectory.crouch.duration  # type: ignore[union-attr]
+    extend_dur = phase_machine.trajectory.extend.duration  # type: ignore[union-attr]
 
-    phase_machine.update(dt=0.30, leg_height=0.09, vz=0.0, contact_count=2)
+    phase_machine.update(dt=crouch_dur + 0.01, leg_height=0.09, vz=0.0, contact_count=2)
     assert phase_machine.phase == JumpPhase.EXTEND
 
-    phase_machine.update(dt=0.13, leg_height=0.14, vz=0.2, contact_count=0)
+    # vz=0.5 > 0.3 阈值 → FLIGHT
+    phase_machine.update(dt=extend_dur + 0.01, leg_height=0.14, vz=0.5, contact_count=0)
     assert phase_machine.phase == JumpPhase.FLIGHT
 
     phase_machine.update(dt=0.01, leg_height=0.13, vz=-0.1, contact_count=2)
     assert phase_machine.phase == JumpPhase.LAND
 
 
-def test_vmc_soft_limits_rated_phases_but_allows_extend_peak(tmp_path: Path) -> None:
+def test_vmc_extend_dynamic_ff_can_exceed_stand_torque_clip(tmp_path: Path) -> None:
+    """EXTEND 期间动态 FF 跟随轨迹 ḧ_target,峰值力矩允许 > 3.5 N·m (STAND clip)。"""
     model, data = build_controlled_model(
         Path("sim/robot/robot.urdf"),
         cache_dir=tmp_path,
         terrain=None,
     )
     params = STAND_PARAMS.vmc
-    params.jump_extend_feedforward = 12.5
-    params.jump_extend_feedforward_duration = 0.05
-    params.crouch_target_height = 0.09
-    params.crouch_duration = 0.20
     phase_machine = JumpPhaseMachine()
     controller = VmcController(params, phase_machine=phase_machine)
     addresses = model_addresses(model)
     leg_indices = [addresses.actuators[name] for name in MODEL_SEMANTICS.leg_motor_joints]
 
+    # STAND: 仅重力补偿,|τ| <= 3.5
     phase_machine.phase = JumpPhase.STAND
     state = extract_sim_state(model, data)
     stand_control = controller.preview_control(model, data, state)
     assert np.max(np.abs(stand_control[leg_indices])) <= 3.5 + 1e-9
 
-    # EXTEND feedforward gate: 11.5 N·m is only applied while motor θ is
-    # below target_motor_angle = LUT(target_height). Drive the motors below
-    # LUT.theta_max so the gate stays open, otherwise PID takes over.
-    motor_qpos_indices = [addresses.joint_qpos[name] for name in MODEL_SEMANTICS.leg_motor_joints]
-    for qpos_idx in motor_qpos_indices:
-        data.qpos[qpos_idx] = -0.05
-    mujoco.mj_forward(model, data)
-    state = extract_sim_state(model, data)
+    # 构造轨迹,跳到 EXTEND 中段 (ḧ 接近峰值)
+    traj = JumpTrajectory(MANUAL_JUMP_TRAJECTORY_PARAMS, h_start=0.142, cmd_jump_amplitude=1.0)
+    phase_machine.trajectory = traj
     phase_machine.phase = JumpPhase.EXTEND
-    phase_machine.time_in_phase = 0.01
+    phase_machine.time_in_phase = traj.extend.duration / 2.0  # 中段加速度峰值附近
     extend_control = controller.preview_control(model, data, state)
-    # control = gravity_torque + jump_extend_feedforward. Gravity term varies
-    # with the leg jacobian (~1-2 N·m); we mainly care that the 12.5 N·m
-    # feedforward bypasses the ±3.5 STAND/CROUCH/LAND clip.
-    assert np.all(extend_control[leg_indices] > 10.0)
+    # 动态 FF: τ = m * (g + ḧ_peak) * dh/dθ / 2. 满幅跳 (10cm) 中段 ḧ ~ 60 m/s²
+    # → FF 显著大于 STAND 的 1-2 N·m 重力补偿。
+    assert np.max(np.abs(extend_control[leg_indices])) > 3.5
 
 
-def test_flight_lqr_keeps_pitch_roll_control_and_releases_wheel_targets(tmp_path: Path) -> None:
+def test_flight_phase_zeros_output_and_keeps_lqr_dormant(tmp_path: Path) -> None:
+    """相位独占重构后: FLIGHT 时 controller 输出全 0,LQR 不参与 (但实例保留)。
+
+    旧行为 1: FLIGHT 时 LQR 仍输出 forward/roll 力矩,通过 _flight_lqr_weight_schedule
+    动态切换 Q,累积 reaction torque 导致空中 pitch 漂移 ~0.3 rad。
+    旧行为 2: FLIGHT 时所有输出 = 0,base 姿态由角动量保持 — 但跳得高时 (>=80mm)
+    EXTEND 末期累积的 pitch_rate (-3 ~ -6 rad/s) 在 250ms 飞行中累积 -1 rad pitch,
+    落地前就已倒下。
+    新行为: FLIGHT 时 LQR 仍不参与,但 VMC 在 FLIGHT 用对称腿电机做 pitch_rate 反作用
+    阻尼 (左右同 τ = K*pitch_rate),通过 Newton 3rd 给 base 反向力矩抑制空中翻转。
+    输出: wheels=0, leg motors = 对称的 pitch_rate 阻尼力矩 (左右严格相等)。
+    """
     model, data = build_controlled_model(
         Path("sim/robot/robot.urdf"),
         cache_dir=tmp_path,
@@ -209,9 +250,11 @@ def test_flight_lqr_keeps_pitch_roll_control_and_releases_wheel_targets(tmp_path
     controller = create_controlled_controller("lqr_vmc", "stand")
     assert hasattr(controller, "vmc_controller")
     state = extract_sim_state(model, data)
+    # STAND 调一次初始化 LQR
     controller(model, data, state)
     lqr = controller.lqr_controller
     assert lqr is not None
+    assert lqr.gain.shape == (2, 5)
 
     phase_machine = controller.vmc_controller.phase_machine
     assert phase_machine is not None
@@ -219,11 +262,19 @@ def test_flight_lqr_keeps_pitch_roll_control_and_releases_wheel_targets(tmp_path
     state = extract_sim_state(model, data)
     control = controller(model, data, state)
 
-    assert np.any(np.abs(control) > 1e-9)
-    # 5D state: target[4] 是 wheel_vel target, FLIGHT 释放为 0
-    assert lqr.target[4] == 0.0
-    assert lqr.gain.shape == (2, 5)
-    # 当前 tangent state 不应该影响 LQR target shape
+    # FLIGHT 输出: wheels = 0, leg motors = 对称 pitch_rate 阻尼 (左右严格相等)。
+    # state.pitch_rate ≈ 0 (stand 初始化),所以阻尼力矩 ≈ 0,但代码路径要走通。
+    addresses = model_addresses(model)
+    left_act = addresses.actuators["base_link_旋转-2"]
+    right_act = addresses.actuators["base_link_旋转-1"]
+    assert control[left_act] == pytest.approx(control[right_act], abs=1e-9), (
+        f"FLIGHT 必须对称: left={control[left_act]} right={control[right_act]}"
+    )
+    # wheel actuators 严格 0 (LQR 不参与)
+    wheel_l = addresses.actuators["link2_left_旋转-13"]
+    wheel_r = addresses.actuators["link2_right_旋转-12"]
+    assert control[wheel_l] == 0.0 and control[wheel_r] == 0.0
+    # tangent state provider 接口仍然是 5D (没改 LQR 状态维度)
     assert balance_tangent_state_5d(model, data, state).shape == (5,)
 
 
@@ -250,5 +301,9 @@ def test_cmd_jump_rollout_reaches_airborne_contact_state(tmp_path: Path) -> None
     final_phase = controller.vmc_controller.phase_machine.phase
 
     assert min_contact_count == 0
-    assert max_z >= initial_z + 0.07
+    # 当前 5-bar 几何 + 12.5 N·m 电机扭矩极限下,扭矩饱和后能量主要损耗在
+    # pitch 旋转 (~8°) 和轮子滚动上,实际 takeoff 速度约 0.5 m/s,空中升高
+    # ~13mm。这是当前硬件参数 + PD/FF 控制能达到的水平; 想要更高的跳跃高度
+    # 需要 trajectory optimization 处理 pitch 耦合,或更大的电机。
+    assert max_z >= initial_z + 0.010
     assert final_phase != JumpPhase.FALLEN

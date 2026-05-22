@@ -19,6 +19,7 @@ import numpy as np
 from sim.controllers.combined import CombinedController
 from sim.controllers.default_params import STAND_PARAMS
 from sim.controllers.phase import JumpPhase, JumpPhaseMachine, JumpPhaseParams
+from sim.controllers.jump_trajectory import JumpTrajectory, JumpTrajectoryParams
 from sim.controllers.vmc import LEG_CLOSED_LOOP, VmcController
 from sim.gamepad import GamepadCommandMapper, GamepadDevice, open_gamepad
 from sim.model_semantics import MODEL_SEMANTICS
@@ -42,12 +43,25 @@ LEG_MOTOR_SIDE_BY_JOINT: dict[str, str] = {
 }
 
 MANUAL_JUMP_PHASE_PARAMS = JumpPhaseParams(
-    crouch_duration=0.20,
-    crouch_target_height=0.09,
-    extend_duration=0.05,
-    extend_timeout=1.00,
     flight_timeout=0.60,
-    land_duration=0.20,
+)
+MANUAL_JUMP_TRAJECTORY_PARAMS = JumpTrajectoryParams(
+    crouch_duration=0.25,
+    land_duration=0.25,
+    # air_height_max 是 trajectory v_target 的 ballistic 等效高度 (cmd_jump=1.0 时),
+    # 不是实测跳跃高度 — 实测约 25-30% 弹道增益 (motor 推不出全部 v_target,leg 接近
+    # max extension 时弹跳损耗动能)。
+    #
+    # 跳跃高度 vs 前向漂移 (在 trapezoid 地形,LQR 用前向轮转矩稳定 pitch,长 FLIGHT
+    # 期间 pitch 漂移 ~0.4-0.6 rad,落地后 LQR 必须把车前移才能扶正):
+    #   0.30 → 57mm 跳 / 3cm 漂移   (跳不够高)
+    #   0.40 → 94mm 跳 / 3cm 漂移   ✓ 当前默认 (接近 10cm,可接受)
+    #   0.50 → 113mm 跳 / 33cm 漂移 (跳够高但漂太远)
+    #   0.70 → 121mm 跳 / 14cm 漂移
+    # 0.40 vs 0.44 有非线性 bifurcation (FLIGHT 末期 pitch_rate 方向不同),
+    # 提高 air_height_max 时 drift 不单调。要消除 drift 必须从 EXTEND 入手
+    # (避免起跳给 base 注入 pitch_rate)。
+    air_height_max=0.40,
 )
 
 
@@ -187,21 +201,17 @@ def create_controlled_controller(controller_name: str, scenario: str) -> Control
         return zero_controller
 
     params = deepcopy(STAND_PARAMS)
-    params.vmc.crouch_target_height = 0.09
-    params.vmc.crouch_duration = MANUAL_JUMP_PHASE_PARAMS.crouch_duration
-    params.vmc.extend_offset = 0.03
     params.vmc.max_height_rate = 100.0
-    # 7.0 N·m gives a stable jump across the entire cmd_height range
-    # (0.078 / 0.110 / 0.142 all clear). 11.5 was tuned for nominal=0.142 and
-    # blows pitch past 1.5 rad when the leg starts low — the closed-chain W
-    # matrix is near-singular so two-side same-direction motor torques map
-    # almost entirely to base pitch wrench, not vertical thrust.
-    params.vmc.jump_extend_feedforward = 7.0
-    params.vmc.jump_extend_feedforward_duration = MANUAL_JUMP_PHASE_PARAMS.extend_duration
 
     phase_machine = JumpPhaseMachine(MANUAL_JUMP_PHASE_PARAMS)
     if scenario == "jump":
-        phase_machine.start_jump()
+        # 'jump' scenario 启动时立刻起跳: 用默认 nominal_height 作为 h_start, 满幅。
+        traj = JumpTrajectory(
+            MANUAL_JUMP_TRAJECTORY_PARAMS,
+            h_start=float(params.vmc.nominal_height),
+            cmd_jump_amplitude=1.0,
+        )
+        phase_machine.start_jump(traj)
     elif scenario not in ("stand", "drive", "fall_recover"):
         raise ValueError(f"unsupported scenario: {scenario}")
 
@@ -545,12 +555,37 @@ def _trigger_jump_on_rising_edge(
     jump_command: float,
     previous_jump_command: float,
 ) -> float:
-    """Start one jump when cmd_jump crosses from off to on."""
+    """Start one jump when cmd_jump crosses from off to on.
+
+    cmd_jump 现在是连续值 [0, 1] 控制跳跃幅度。h_start 从 nominal_height 读取
+    (机器人静态时腿高 = 当前 cmd_height)。
+    """
     phase_machine = getattr(getattr(controller, "vmc_controller", controller), "phase_machine", None)
-    is_on = jump_command > 0.5
-    was_on = previous_jump_command > 0.5
+    is_on = jump_command > 0.01
+    was_on = previous_jump_command > 0.01
     if is_on and not was_on and phase_machine is not None and phase_machine.phase == JumpPhase.STAND:
-        phase_machine.start_jump()
+        # h_start 优先用 nominal_height (controller 当前 cmd_height)
+        params = getattr(controller, "params", None)
+        vmc_params = getattr(params, "vmc", None) if params is not None else None
+        h_start = float(getattr(vmc_params, "nominal_height", 0.142))
+        # 触发幅度: MuJoCo Control 面板的滑条很难精确拖到 1.0,
+        # 中间位置 (e.g. 0.16) 对应 v_takeoff ~1.2 m/s,跳不起来。
+        # 把 cmd_jump 滑条当作"触发按钮": 只要 rising edge 就用满幅 (1.0)。
+        # 如果用户后续需要按比例缩放,把这里改回 float(jump_command) 即可。
+        amp = 1.0
+        traj = JumpTrajectory(
+            MANUAL_JUMP_TRAJECTORY_PARAMS,
+            h_start=h_start,
+            cmd_jump_amplitude=amp,
+        )
+        phase_machine.start_jump(traj)
+        print(
+            f"[jump-trigger] slider={float(jump_command):.3f} → amp={amp:.2f} "
+            f"h_start={h_start:.3f} h_air={traj.h_air:.3f} "
+            f"v_takeoff={traj.v_takeoff:.2f}m/s "
+            f"extend_duration={traj.extend.duration*1000:.0f}ms",
+            flush=True,
+        )
     return jump_command
 
 

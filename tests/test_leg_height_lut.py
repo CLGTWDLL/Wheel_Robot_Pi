@@ -25,8 +25,8 @@ def test_default_lut_exposes_viewer_low_range() -> None:
 
 
 def test_default_lut_geometry_values_match_side_specific_probe() -> None:
-    assert np.isclose(DEFAULT_LUT.pitch_eq_from_height(0.142), -0.0249, atol=0.005)
-    assert np.isclose(DEFAULT_LUT.dy_wheel_dh(0.142), 0.259, atol=0.04)
+    assert np.isclose(DEFAULT_LUT.pitch_eq_from_height(0.142), 0.0003, atol=0.005)
+    assert np.isclose(DEFAULT_LUT.dy_wheel_dh(0.142), 0.243, atol=0.04)
 
 
 def test_lut_uses_side_specific_motor_angles(tmp_path) -> None:
