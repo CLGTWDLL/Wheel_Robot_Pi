@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ORB与ORB-SLAM系统交互式原理解析</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chosen Palette: Slate & Blue Neutrals -->
+    <!-- Application Structure Plan: 
+         A single-page application structured into a logical learning journey: 
+         1. Hero/Intro to set the context.
+         2. Navigation bar for quick jumps.
+         3. Section 1 (ORB Principle): Uses an interactive tab system to break down FAST and BRIEF, preventing information overload.
+         4. Section 2 (Monocular Localization): Uses a step-by-step interactive timeline/cards to explain how 2D becomes 3D.
+         5. Section 3 (ORB-SLAM System): Features an interactive block diagram (CSS/HTML) of the 3 threads, linked to a simulated SLAM Map visualization (Chart.js) to show the final output.
+         This structure ensures the user understands the atomic unit (ORB) before understanding the action (Localization), and finally the system architecture (ORB-SLAM).
+    -->
+    <!-- Visualization & Content Choices: 
+         - ORB Breakdown: HTML/CSS Tabs -> Goal: Explain algorithms step-by-step without overwhelming text.
+         - Monocular Concept: HTML grid timeline -> Goal: Show the chronological pipeline of initialization to tracking.
+         - SLAM Map Simulation: Chart.js Scatter/Line chart -> Goal: Visually demonstrate what a SLAM system outputs (trajectory + map points). NO SVG/Mermaid used.
+         - System Architecture: Interactive HTML Flexbox Diagram -> Goal: Explain the multi-threading of ORB-SLAM interactively.
+    -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #0f172a; }
+        .chart-container { position: relative; width: 100%; max-width: 800px; margin-left: auto; margin-right: auto; height: 400px; max-height: 500px; }
+        .fade-in { animation: fadeIn 0.5s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Custom Binary String Animation CSS */
+        .binary-string { font-family: monospace; letter-spacing: 2px; }
+        .active-tab { background-color: #3b82f6; color: white; border-color: #3b82f6; }
+        .inactive-tab { background-color: #ffffff; color: #475569; border-color: #cbd5e1; }
+        
+        /* Abstract Diagram CSS Shapes (No SVG) */
+        .camera-lens { width: 40px; height: 40px; border-radius: 50%; border: 4px solid #3b82f6; position: relative; }
+        .camera-lens::after { content: ''; position: absolute; top: 8px; left: 8px; width: 16px; height: 16px; border-radius: 50%; background: #93c5fd; }
+        .feature-point { width: 12px; height: 12px; background-color: #ef4444; border-radius: 50%; display: inline-block; }
+    </style>
+</head>
+<body class="antialiased scroll-smooth">
+
+    <!-- Header Navigation -->
+    <header class="sticky top-0 z-50 bg-white/90 backdrop-blur shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
+            <div class="font-bold text-xl text-blue-700 flex items-center gap-2">
+                <div class="w-4 h-4 bg-blue-600 rounded-sm transform rotate-45"></div>
+                ORB-SLAM 原理透析
+            </div>
+            <nav class="hidden md:flex space-x-6">
+                <a href="#orb-feature" class="text-slate-600 hover:text-blue-600 font-medium transition">第一部分：ORB算子</a>
+                <a href="#monocular-loc" class="text-slate-600 hover:text-blue-600 font-medium transition">第二部分：单目定位原理</a>
+                <a href="#orb-slam-sys" class="text-slate-600 hover:text-blue-600 font-medium transition">第三部分：ORB-SLAM系统</a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="max-w-6xl mx-auto px-4 py-16 md:py-24 flex flex-col items-center text-center">
+        <h1 class="text-4xl md:text-6xl font-bold text-slate-900 leading-tight mb-6">
+            让机器拥有视觉：<br><span class="text-blue-600">从ORB特征到SLAM系统</span>
+        </h1>
+        <p class="text-lg md:text-xl text-slate-600 max-w-3xl mb-10">
+            同步定位与建图 (SLAM) 是自动驾驶、AR/VR 和机器人导航的核心技术。本交互式报告将带您深入探讨著名的视觉SLAM方案——ORB-SLAM，从底层的像素级特征提取，到复杂的系统级多线程架构。
+        </p>
+        <a href="#orb-feature" class="px-8 py-3 bg-blue-600 text-white rounded-full font-semibold hover:bg-blue-700 transition shadow-lg hover:shadow-xl">
+            开始探索
+        </a>
+    </section>
+
+    <!-- Section 1: ORB Principle -->
+    <section id="orb-feature" class="max-w-6xl mx-auto px-4 py-16">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 md:p-12">
+            <h2 class="text-3xl font-bold text-slate-800 mb-4 border-l-4 border-blue-500 pl-4">第一部分：ORB 算子原理 (Oriented FAST and Rotated BRIEF)</h2>
+            <p class="text-slate-600 mb-8 text-lg">
+                在让相机理解世界之前，它必须先能在图像中找到具有显著特征的"锚点"。ORB (Oriented FAST and Rotated BRIEF) 是一种极其快速且具备旋转不变性的特征提取与描述算法。它结合了 <strong>FAST角点检测</strong> 和 <strong>BRIEF描述子</strong>，并做出了关键改进。
+            </p>
+
+            <!-- Interactive Tabs for ORB -->
+            <div class="flex flex-col md:flex-row gap-6 mt-8">
+                <!-- Tab Headers -->
+                <div class="w-full md:w-1/4 flex flex-col gap-3">
+                    <button onclick="switchOrbTab('fast')" id="tab-fast" class="active-tab text-left px-5 py-4 rounded-xl border font-semibold transition">
+                        1. oFAST 角点检测
+                    </button>
+                    <button onclick="switchOrbTab('brief')" id="tab-brief" class="inactive-tab text-left px-5 py-4 rounded-xl border font-semibold transition">
+                        2. rBRIEF 描述子
+                    </button>
+                    <button onclick="switchOrbTab('match')" id="tab-match" class="inactive-tab text-left px-5 py-4 rounded-xl border font-semibold transition">
+                        3. 汉明距离匹配
+                    </button>
+                </div>
+
+                <!-- Tab Content Area -->
+                <div class="w-full md:w-3/4 bg-slate-50 rounded-xl border border-slate-200 p-6 min-h-[350px] relative overflow-hidden">
+                    
+                    <!-- Content: FAST -->
+                    <div id="content-fast" class="fade-in block h-full flex flex-col justify-center">
+                        <h3 class="text-xl font-bold text-slate-800 mb-3 flex items-center gap-2">
+                            <span class="feature-point"></span> Oriented FAST (oFAST)
+                        </h3>
+                        <p class="text-slate-600 mb-4">
+                            <strong>FAST</strong> 算法通过考察像素点周围的一圈像素，若有连续 N 个像素的亮度都大于或小于中心像素，则认为它是角点。这非常快，但没有方向和尺度。<br>
+                            <strong>ORB的改进 (oFAST)：</strong><br>
+                            1. <strong>尺度不变性：</strong>构建图像金字塔，在不同层级提取角点。<br>
+                            2. <strong>旋转不变性（灰度质心法）：</strong>计算角点邻域内的图像灰度质心，将角点到质心的连线向量作为该特征点的方向。
+                        </p>
+                        <!-- Abstract Visual -->
+                        <div class="w-full h-32 bg-white border rounded-lg flex items-center justify-center relative shadow-inner overflow-hidden">
+                            <!-- Simulated Pixel Grid & Corner -->
+                            <div class="w-16 h-16 bg-slate-200 relative border border-slate-300">
+                                <div class="absolute inset-0 m-auto w-2 h-2 bg-red-500 rounded-full z-10" title="Center Pixel"></div>
+                                <div class="absolute w-24 h-24 border-2 border-dashed border-blue-400 rounded-full top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"></div>
+                                <!-- Arrow indicating direction -->
+                                <div class="absolute top-1/2 left-1/2 w-16 h-1 bg-green-500 origin-left transform -translate-y-1/2 rotate-45 z-20"></div>
+                            </div>
+                            <span class="absolute bottom-2 right-4 text-sm text-slate-400 font-mono">灰度质心方向向量 &rarr;</span>
+                        </div>
+                    </div>
+
+                    <!-- Content: BRIEF -->
+                    <div id="content-brief" class="fade-in hidden h-full flex flex-col justify-center">
+                        <h3 class="text-xl font-bold text-slate-800 mb-3 flex items-center gap-2">
+                            <span class="text-2xl font-mono text-blue-600">{..}</span> Rotated BRIEF (rBRIEF)
+                        </h3>
+                        <p class="text-slate-600 mb-4">
+                            找到特征点后，我们需要用数据描述它，这就是<strong>描述子</strong>。<strong>BRIEF</strong> 是一种二进制描述子，它在特征点周围随机挑选一对对像素，比较它们的灰度大小，产生 0 或 1，最终生成一个256位的二进制串。<br>
+                            <strong>ORB的改进 (rBRIEF)：</strong> 标准 BRIEF 不具备旋转不变性。ORB 利用前面 oFAST 计算出的方向，将随机点对进行旋转，从而使提取出来的二进制串具有旋转不变性。
+                        </p>
+                        <div class="w-full bg-slate-800 text-green-400 p-4 rounded-lg font-mono text-sm break-all shadow-inner relative">
+                            <div class="mb-2 text-slate-300 text-xs">实时生成的 256-bit BRIEF 描述子：</div>
+                            <span id="brief-string" class="binary-string"></span>
+                            <button onclick="generateBrief()" class="absolute top-4 right-4 bg-slate-600 text-white px-2 py-1 rounded text-xs hover:bg-slate-500">重新生成</button>
+                        </div>
+                    </div>
+
+                    <!-- Content: MATCH -->
+                    <div id="content-match" class="fade-in hidden h-full flex flex-col justify-center">
+                        <h3 class="text-xl font-bold text-slate-800 mb-3 flex items-center gap-2">
+                            <span class="text-xl">⚡</span> 汉明距离 (Hamming Distance) 极速匹配
+                        </h3>
+                        <p class="text-slate-600 mb-4">
+                            因为 ORB 描述子是纯二进制的，计算两个特征点的相似度（距离）时，不需要进行复杂的浮点运算（如计算欧氏距离）。<br>
+                            我们可以直接使用 <strong>异或 (XOR)</strong> 操作计算两个二进制串中不同位的个数，这被称为汉明距离。在现代 CPU 上，XOR 操作极快，这使得 ORB 的匹配速度远超 SIFT 和 SURF。
+                        </p>
+                        <div class="bg-white p-4 rounded-lg border font-mono text-sm flex flex-col gap-2 shadow-inner">
+                            <div class="flex justify-between items-center"><span class="text-slate-500">点A描述子:</span> <span class="text-blue-600 tracking-widest">10110010</span></div>
+                            <div class="flex justify-between items-center"><span class="text-slate-500">点B描述子:</span> <span class="text-slate-800 tracking-widest">10010110</span></div>
+                            <hr>
+                            <div class="flex justify-between items-center font-bold"><span class="text-red-500">异或 (XOR):</span> <span class="text-red-500 tracking-widest">00100100</span></div>
+                            <div class="text-right text-slate-600 text-xs mt-1">汉明距离 = 2 (有两个不同的位) -> 距离越小越相似</div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Section 2: Monocular Localization Principle -->
+    <section id="monocular-loc" class="max-w-6xl mx-auto px-4 py-16 bg-white border-y border-slate-200">
+        <div class="mb-12 text-center">
+            <h2 class="text-3xl font-bold text-slate-800 mb-4 inline-block relative">
+                第二部分：单目相机如何实现定位？
+                <div class="absolute bottom-0 left-0 w-full h-1 bg-blue-500 opacity-50"></div>
+            </h2>
+            <p class="text-slate-600 max-w-3xl mx-auto text-lg">
+                单目相机（只有一个摄像头的普通相机）无法直接获取深度信息（一张图片无法知道物体有多远）。那么它是如何实现 3D 定位的呢？核心思想是：<strong>运动恢复结构 (Structure from Motion, SfM)</strong>。
+            </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <!-- Step 1 -->
+            <div class="bg-slate-50 rounded-xl p-6 border border-slate-200 hover:shadow-md transition relative group">
+                <div class="absolute -top-4 -left-4 w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg">1</div>
+                <h3 class="text-lg font-bold text-slate-800 mb-2 mt-2">特征匹配与追踪</h3>
+                <p class="text-sm text-slate-600">
+                    相机移动时，系统在连续的两帧图像中提取 ORB 特征点，并通过汉明距离将相同的物理点匹配起来。
+                </p>
+            </div>
+            <!-- Step 2 -->
+            <div class="bg-slate-50 rounded-xl p-6 border border-slate-200 hover:shadow-md transition relative group">
+                <div class="absolute -top-4 -left-4 w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg">2</div>
+                <h3 class="text-lg font-bold text-slate-800 mb-2 mt-2">系统初始化 (对极几何)</h3>
+                <p class="text-sm text-slate-600">
+                    通过初始两帧的匹配点，计算基础矩阵/本质矩阵或单应矩阵，恢复出相机初始的运动（旋转和平移），并<strong>三角化</strong>出第一批 3D 地图点。注意：单目存在<strong>尺度不确定性</strong>（不知道真实的物理尺寸）。
+                </p>
+            </div>
+            <!-- Step 3 -->
+            <div class="bg-slate-50 rounded-xl p-6 border border-slate-200 hover:shadow-md transition relative group">
+                <div class="absolute -top-4 -left-4 w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg">3</div>
+                <h3 class="text-lg font-bold text-slate-800 mb-2 mt-2">PnP 位姿估计</h3>
+                <p class="text-sm text-slate-600">
+                    当系统已经有了 3D 地图点后，新来一帧图像，只要能匹配到足够多的已知 3D 点，就可以利用 PnP (Perspective-n-Point) 算法反向计算出当前相机的位置和姿态。
+                </p>
+            </div>
+            <!-- Step 4 -->
+            <div class="bg-slate-50 rounded-xl p-6 border border-slate-200 hover:shadow-md transition relative group">
+                <div class="absolute -top-4 -left-4 w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg">4</div>
+                <h3 class="text-lg font-bold text-slate-800 mb-2 mt-2">Bundle Adjustment (BA)</h3>
+                <p class="text-sm text-slate-600">
+                    为了消除累积误差，系统会构建一个庞大的最小二乘问题，最小化“重投影误差”，同时优化相机位姿和 3D 地图点的坐标。
+                </p>
+            </div>
+        </div>
+
+        <!-- Interactive Demonstration of Perspective -->
+        <div class="mt-12 bg-slate-900 rounded-2xl p-8 flex flex-col items-center justify-center text-white relative overflow-hidden">
+            <h3 class="text-xl font-bold mb-4 z-10">视差与三角测量 (视差产生深度)</h3>
+            <p class="text-sm text-slate-300 mb-6 max-w-2xl text-center z-10">
+                观察下方：当相机水平移动时，近处的物体（红色点）在视野中移动的幅度大，远处的物体（蓝色点）移动的幅度小。单目 SLAM 就是利用这种“视差”来推算距离并建图的。
+            </p>
+            
+            <div class="w-full max-w-lg h-40 bg-slate-800 rounded-lg relative overflow-hidden border border-slate-700 shadow-inner" id="parallax-container" onmousemove="handleParallax(event)" onmouseleave="resetParallax()">
+                <div class="absolute top-4 left-4 text-xs text-slate-500 font-mono">&lt; 鼠标在区域内左右滑动模拟相机移动 &gt;</div>
+                <!-- Camera visual -->
+                <div id="parallax-camera" class="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-2xl" style="transition: left 0.1s ease-out;">📷</div>
+                
+                <!-- Close point (moves fast) -->
+                <div id="point-close" class="absolute top-1/2 left-1/2 w-4 h-4 bg-red-500 rounded-full shadow-[0_0_10px_rgba(239,68,68,0.8)]" style="transition: left 0.1s ease-out; transform: translate(-50%, -50%);"></div>
+                <div class="absolute top-1/2 mt-3 left-1/2 transform -translate-x-1/2 text-[10px] text-red-300" id="label-close" style="transition: left 0.1s ease-out;">近处</div>
+
+                <!-- Far point (moves slow) -->
+                <div id="point-far" class="absolute top-1/4 left-[60%] w-2 h-2 bg-blue-400 rounded-full shadow-[0_0_10px_rgba(96,165,250,0.8)]" style="transition: left 0.1s ease-out; transform: translate(-50%, -50%);"></div>
+                <div class="absolute top-1/4 mt-2 left-[60%] transform -translate-x-1/2 text-[10px] text-blue-300" id="label-far" style="transition: left 0.1s ease-out;">远处</div>
+            </div>
+        </div>
+
+    </section>
+
+    <!-- Section 3: ORB-SLAM System Architecture & Output -->
+    <section id="orb-slam-sys" class="max-w-6xl mx-auto px-4 py-16">
+        <div class="text-center mb-10">
+            <h2 class="text-3xl font-bold text-slate-800 mb-4 inline-block relative border-b-4 border-blue-500 pb-2">
+                第三部分：ORB-SLAM 系统架构
+            </h2>
+            <p class="text-slate-600 max-w-3xl mx-auto text-lg mt-4">
+                单个 ORB 算子和定位算法不足以构成一个实用的系统。ORB-SLAM 的伟大之处在于它极其稳健的<strong>三大并发线程</strong>架构，这三个线程协同工作，实现了实时的定位与高精度的建图。
+            </p>
+        </div>
+
+        <div class="flex flex-col lg:flex-row gap-8 items-start">
+            
+            <!-- Architecture Diagram (Interactive HTML) -->
+            <div class="w-full lg:w-1/3 flex flex-col gap-4">
+                <div class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">点击模块查看功能</div>
+                
+                <button onclick="showSystemDetail('tracking')" id="btn-tracking" class="w-full text-left bg-blue-50 hover:bg-blue-100 border-2 border-blue-400 rounded-xl p-4 transition shadow-sm relative overflow-hidden focus:outline-none">
+                    <div class="font-bold text-blue-800 text-lg mb-1">1. 跟踪线程 (Tracking)</div>
+                    <div class="text-blue-600 text-sm">前端，高频实时执行</div>
+                    <div class="absolute right-4 top-1/2 transform -translate-y-1/2 text-blue-300 text-3xl opacity-50">⚡</div>
+                </button>
+
+                <button onclick="showSystemDetail('mapping')" id="btn-mapping" class="w-full text-left bg-green-50 hover:bg-green-100 border-2 border-green-400 rounded-xl p-4 transition shadow-sm relative overflow-hidden focus:outline-none opacity-70">
+                    <div class="font-bold text-green-800 text-lg mb-1">2. 局部建图 (Local Mapping)</div>
+                    <div class="text-green-600 text-sm">后端，处理关键帧，优化局部地图</div>
+                    <div class="absolute right-4 top-1/2 transform -translate-y-1/2 text-green-300 text-3xl opacity-50">🗺️</div>
+                </button>
+
+                <button onclick="showSystemDetail('loop')" id="btn-loop" class="w-full text-left bg-purple-50 hover:bg-purple-100 border-2 border-purple-400 rounded-xl p-4 transition shadow-sm relative overflow-hidden focus:outline-none opacity-70">
+                    <div class="font-bold text-purple-800 text-lg mb-1">3. 回环检测 (Loop Closing)</div>
+                    <div class="text-purple-600 text-sm">全局优化，消除累积漂移</div>
+                    <div class="absolute right-4 top-1/2 transform -translate-y-1/2 text-purple-300 text-3xl opacity-50">🔄</div>
+                </button>
+
+                <!-- Detailed Info Box -->
+                <div class="mt-4 bg-white border border-slate-200 rounded-xl p-5 shadow-inner min-h-[160px]">
+                    <h4 id="sys-detail-title" class="font-bold text-slate-800 text-lg mb-2">跟踪线程 (Tracking)</h4>
+                    <p id="sys-detail-text" class="text-slate-600 text-sm leading-relaxed">
+                        负责对每一帧新输入的图像进行特征提取，与上一帧或参考关键帧进行匹配，估计相机的实时位姿。如果位姿丢失，会调用重定位功能。最后决定是否将当前帧提升为“关键帧”并发送给建图线程。
+                    </p>
+                </div>
+            </div>
+
+            <!-- Visualization: Simulated SLAM Output (Chart.js) -->
+            <div class="w-full lg:w-2/3 bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-bold text-slate-800">系统输出可视化模拟：轨迹与稀疏点云地图</h3>
+                    <button onclick="runSlamSimulation()" class="text-sm bg-slate-800 text-white px-4 py-2 rounded-md hover:bg-slate-700 transition">▶ 运行SLAM模拟</button>
+                </div>
+                <p class="text-xs text-slate-500 mb-4">
+                    图表展示了单目ORB-SLAM在鸟瞰图（俯视 2D）下构建的稀疏特征点地图（灰色散点）以及估计的相机运动轨迹（蓝色连线）。
+                </p>
+                <!-- Chart Container (CRITICAL REQUIREMENT) -->
+                <div class="chart-container bg-slate-50 border rounded-lg p-2">
+                    <canvas id="slamChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+    <!-- Footer Summary -->
+    <footer class="bg-slate-900 text-slate-400 py-12 border-t border-slate-800 mt-12">
+        <div class="max-w-6xl mx-auto px-4 text-center">
+            <div class="text-2xl font-bold text-white mb-4">总结：为什么 ORB-SLAM 是一个里程碑？</div>
+            <p class="max-w-3xl mx-auto text-sm leading-relaxed mb-6">
+                ORB-SLAM 创新性地在所有核心模块（跟踪、建图、重定位、回环检测）中统一使用了 <strong>ORB 特征</strong>。这使得系统不需要在不同特征间进行转换，极大地提高了计算效率和鲁棒性。其严谨的多线程设计和共视视图（Covisibility Graph）管理，使得单目相机也能实现极其稳定的长时间定位建图。
+            </p>
+            <div class="text-xs">
+                © Interactive Explainer Built for Educational Purposes.
+            </div>
+        </div>
+    </footer>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // --- 1. ORB Tab Logic ---
+        function switchOrbTab(tabName) {
+            // Hide all contents
+            document.getElementById('content-fast').classList.add('hidden');
+            document.getElementById('content-brief').classList.add('hidden');
+            document.getElementById('content-match').classList.add('hidden');
+            
+            // Reset tab styles
+            const tabs = ['tab-fast', 'tab-brief', 'tab-match'];
+            tabs.forEach(t => {
+                const el = document.getElementById(t);
+                el.classList.remove('active-tab');
+                el.classList.add('inactive-tab');
+            });
+
+            // Show selected
+            document.getElementById('content-' + tabName).classList.remove('hidden');
+            document.getElementById('tab-' + tabName).classList.remove('inactive-tab');
+            document.getElementById('tab-' + tabName).classList.add('active-tab');
+
+            if(tabName === 'brief') {
+                generateBrief();
+            }
+        }
+
+        function generateBrief() {
+            let str = '';
+            for(let i=0; i<64; i++) {
+                str += Math.random() > 0.5 ? '1' : '0';
+                if(i % 8 === 7) str += ' ';
+            }
+            document.getElementById('brief-string').innerText = str + "...(256 bits total)";
+        }
+
+        // --- 2. Parallax / Monocular Concept Logic ---
+        const pContainer = document.getElementById('parallax-container');
+        const pCamera = document.getElementById('parallax-camera');
+        const pClose = document.getElementById('point-close');
+        const lClose = document.getElementById('label-close');
+        const pFar = document.getElementById('point-far');
+        const lFar = document.getElementById('label-far');
+
+        function handleParallax(e) {
+            const rect = pContainer.getBoundingClientRect();
+            // Calculate mouse position ratio from center (-1 to 1)
+            const mouseX = e.clientX - rect.left;
+            const ratio = (mouseX / rect.width) * 2 - 1; 
+
+            // Camera moves with mouse
+            pCamera.style.left = `${50 + (ratio * 40)}%`; 
+            
+            // Close point parallax (moves a lot opposite to camera)
+            const closeBaseLeft = 50;
+            pClose.style.left = `${closeBaseLeft - (ratio * 30)}%`;
+            lClose.style.left = `${closeBaseLeft - (ratio * 30)}%`;
+
+            // Far point parallax (moves slightly opposite to camera)
+            const farBaseLeft = 60;
+            pFar.style.left = `${farBaseLeft - (ratio * 5)}%`;
+            lFar.style.left = `${farBaseLeft - (ratio * 5)}%`;
+        }
+
+        function resetParallax() {
+            pCamera.style.left = '50%';
+            pClose.style.left = '50%';
+            lClose.style.left = '50%';
+            pFar.style.left = '60%';
+            lFar.style.left = '60%';
+        }
+
+        // --- 3. System Architecture Logic ---
+        const sysDetails = {
+            'tracking': {
+                title: "1. 跟踪线程 (Tracking)",
+                text: "负责对每一帧新输入的图像进行特征提取，与上一帧或参考关键帧进行匹配，估计相机的实时位姿。核心步骤包括：ORB特征提取、初始位姿估计（恒速模型或重定位）、局部地图跟踪以及关键帧决策。"
+            },
+            'mapping': {
+                title: "2. 局部建图 (Local Mapping)",
+                text: "处理跟踪线程传来的关键帧。插入新关键帧，通过三角测量创建新的3D地图点，剔除冗余或质量差的地图点和关键帧。进行局部Bundle Adjustment (BA)，优化当前关键帧及其共视关键帧的位姿和局部地图点。"
+            },
+            'loop': {
+                title: "3. 回环检测 (Loop Closing)",
+                text: "利用词袋模型 (Bag of Words, BoW) 对每一个新的关键帧进行场景识别，判断是否回到了曾经到过的地方。一旦检测到回环，计算相似变换 (Sim3) 修正尺度漂移，闭合回环，并进行全局位姿图优化 (Pose Graph Optimization)，使整个轨迹一致。"
+            }
+        };
+
+        function showSystemDetail(module) {
+            // Update Text
+            document.getElementById('sys-detail-title').innerText = sysDetails[module].title;
+            document.getElementById('sys-detail-text').innerText = sysDetails[module].text;
+
+            // Reset Opacity
+            ['tracking', 'mapping', 'loop'].forEach(m => {
+                document.getElementById('btn-' + m).classList.add('opacity-70');
+                document.getElementById('btn-' + m).classList.remove('ring-4', 'ring-offset-2');
+            });
+
+            // Highlight Selected
+            const btn = document.getElementById('btn-' + module);
+            btn.classList.remove('opacity-70');
+            
+            // Add specific ring color based on module
+            if(module === 'tracking') btn.classList.add('ring-4', 'ring-blue-300', 'ring-offset-2');
+            if(module === 'mapping') btn.classList.add('ring-4', 'ring-green-300', 'ring-offset-2');
+            if(module === 'loop') btn.classList.add('ring-4', 'ring-purple-300', 'ring-offset-2');
+        }
+
+        // --- 4. Chart.js SLAM Map Simulation ---
+        let slamChart = null;
+        
+        function initChart() {
+            const ctx = document.getElementById('slamChart').getContext('2d');
+            slamChart = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [
+                        {
+                            label: '3D 地图点 (特征)',
+                            data: [],
+                            backgroundColor: 'rgba(148, 163, 184, 0.6)',
+                            pointRadius: 2,
+                            showLine: false
+                        },
+                        {
+                            label: '相机运动轨迹 (关键帧)',
+                            data: [],
+                            borderColor: '#3b82f6',
+                            backgroundColor: '#3b82f6',
+                            borderWidth: 2,
+                            pointRadius: 4,
+                            pointStyle: 'triangle',
+                            showLine: true,
+                            fill: false,
+                            tension: 0.3
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false, // CRITICAL for filling the container
+                    animation: {
+                        duration: 0 // Disable default animation for custom simulation
+                    },
+                    scales: {
+                        x: { display: false, min: 0, max: 100 },
+                        y: { display: false, min: 0, max: 100 }
+                    },
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return context.datasetIndex === 0 ? 'Map Point' : 'Camera Pose';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Generate static random map points
+        const fullMapPoints = [];
+        for(let i=0; i<150; i++) {
+            fullMapPoints.push({
+                x: 10 + Math.random() * 80,
+                y: 10 + Math.random() * 80
+            });
+        }
+
+        // Defined Trajectory path
+        const trajectoryPoints = [
+            {x: 20, y: 80}, {x: 30, y: 60}, {x: 40, y: 40}, 
+            {x: 60, y: 35}, {x: 80, y: 50}, {x: 75, y: 70}, 
+            {x: 50, y: 85}, {x: 25, y: 80} // Loop Closure
+        ];
+
+        let simInterval;
+        let simStep = 0;
+
+        function runSlamSimulation() {
+            if(!slamChart) initChart();
+            
+            clearInterval(simInterval);
+            simStep = 0;
+            
+            // Reset Data
+            slamChart.data.datasets[0].data = []; // Points
+            slamChart.data.datasets[1].data = []; // Trajectory
+            slamChart.update();
+
+            simInterval = setInterval(() => {
+                if(simStep < trajectoryPoints.length) {
+                    const currentPose = trajectoryPoints[simStep];
+                    
+                    // Add trajectory point
+                    slamChart.data.datasets[1].data.push(currentPose);
+                    
+                    // Add local map points around current pose (simulating Local Mapping)
+                    const localPoints = fullMapPoints.filter(p => {
+                        const dist = Math.sqrt(Math.pow(p.x - currentPose.x, 2) + Math.pow(p.y - currentPose.y, 2));
+                        return dist < 25; // Visibility radius
+                    });
+                    
+                    // Merge local points into global map uniquely
+                    const existingMap = slamChart.data.datasets[0].data;
+                    localPoints.forEach(lp => {
+                        if(!existingMap.some(emp => emp.x === lp.x && emp.y === lp.y)) {
+                            existingMap.push(lp);
+                        }
+                    });
+
+                    // Trigger UI feedback
+                    if(simStep > 0 && simStep < trajectoryPoints.length - 1) showSystemDetail('tracking');
+                    if(simStep % 2 !== 0 && simStep !== trajectoryPoints.length -1) setTimeout(()=>showSystemDetail('mapping'), 300);
+                    
+                    // Loop closure logic at the end
+                    if(simStep === trajectoryPoints.length - 1) {
+                        setTimeout(() => {
+                            showSystemDetail('loop');
+                            // Simulate graph optimization (snap start and end points)
+                            slamChart.data.datasets[1].data[slamChart.data.datasets[1].data.length-1].x = trajectoryPoints[0].x;
+                            slamChart.data.datasets[1].data[slamChart.data.datasets[1].data.length-1].y = trajectoryPoints[0].y;
+                            slamChart.update();
+                        }, 500);
+                    }
+
+                    slamChart.update();
+                    simStep++;
+                } else {
+                    clearInterval(simInterval);
+                }
+            }, 600); // 600ms per step
+        }
+
+        // Initialization
+        window.onload = function() {
+            generateBrief();
+            initChart();
+            // Pre-draw initial state
+            slamChart.data.datasets[0].data = fullMapPoints;
+            slamChart.data.datasets[1].data = trajectoryPoints;
+            slamChart.update();
+        };
+
+    </script>
+</body>
+</html>
