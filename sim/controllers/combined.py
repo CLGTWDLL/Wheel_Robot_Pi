@@ -76,6 +76,9 @@ class CombinedController:
         self._velocity_integral: float = 0.0
         self._yaw_integral: float = 0.0
         self._lqr_gain_cache: dict[tuple[int, int], np.ndarray] = {}
+        # leg-common→pitch feedforward gain, 缓存与 LQR gain 同维度 (height_bin, roll_bin)
+        self._wheel_ff_gain_cache: dict[tuple[int, int], float] = {}
+        self._active_wheel_ff_gain: float = 0.0
         self._active_lqr_gain_key: tuple[int, int] | None = None
         self._height_wheel_velocity_ff: float = 0.0
         self._last_phase = JumpPhase.STAND
@@ -101,6 +104,10 @@ class CombinedController:
         from sim.controllers.balance_lqr import compute_balance_lqr_gain_5d
         return compute_balance_lqr_gain_5d(model, data, self.params.q_diag, self.params.r_diag)
 
+    def _compute_wheel_ff_gain(self, model: Any, data: Any) -> float:
+        from sim.controllers.balance_lqr import wheel_ff_gain_for_leg_common
+        return wheel_ff_gain_for_leg_common(model, data)
+
     def _initialize_lqr(self, model: Any, data: Any, state: SimState) -> None:
         if not np.isfinite(self.params.target_velocity):
             raise ValueError("target_velocity must be finite")
@@ -109,6 +116,11 @@ class CombinedController:
         if gain is None:
             gain = self._compute_lqr_gain(model, data)
             self._lqr_gain_cache[gain_key] = gain
+        ff_gain = self._wheel_ff_gain_cache.get(gain_key)
+        if ff_gain is None:
+            ff_gain = self._compute_wheel_ff_gain(model, data)
+            self._wheel_ff_gain_cache[gain_key] = ff_gain
+        self._active_wheel_ff_gain = ff_gain
         self._active_lqr_gain_key = gain_key
         self._equilibrium_pitch = equilibrium_pitch_from_geometry(model, data)
         target = balance_tangent_state_5d(model, data, state).copy()
@@ -129,7 +141,12 @@ class CombinedController:
         if gain is None:
             gain = self._compute_lqr_gain(model, data)
             self._lqr_gain_cache[gain_key] = gain
+        ff_gain = self._wheel_ff_gain_cache.get(gain_key)
+        if ff_gain is None:
+            ff_gain = self._compute_wheel_ff_gain(model, data)
+            self._wheel_ff_gain_cache[gain_key] = ff_gain
         self._lqr_controller.gain = gain
+        self._active_wheel_ff_gain = ff_gain
         self._active_lqr_gain_key = gain_key
 
     # ---------- Height feedforward ----------
@@ -319,7 +336,18 @@ class CombinedController:
         self._height_wheel_velocity_ff = self._height_wheel_velocity_feedforward(current_leg_height)
 
         self._update_lqr_target(model, data, state, dt)
-        self._lqr_controller.feedforward = np.zeros(2)
+        # Feedforward 抵消 VMC 共模 leg torque 引起的 pitch 扰动:
+        # VMC 在 leg motor 上输出 τ_L, τ_R (vmc_control), 共模 = (τ_L + τ_R)/2.
+        # 这个 common torque 通过 hip motor 反作用产生 pitch_rate 扰动
+        # (实测系数 ≈ -0.15 rad/s² per N·m·leg, 见 _leg_common_to_pitch_coupling).
+        # 用 wheel 提前抵消, LQR 反馈只处理残差。
+        left_leg, right_leg = MODEL_SEMANTICS.leg_motor_joints
+        vmc_common_leg = 0.5 * (
+            float(vmc_control[addresses.actuators[left_leg]])
+            + float(vmc_control[addresses.actuators[right_leg]])
+        )
+        wheel_ff = self._active_wheel_ff_gain * vmc_common_leg
+        self._lqr_controller.feedforward = np.array([wheel_ff, 0.0])
         lqr_control = self._lqr_controller(model, data, state)
         if lqr_control.shape != (2,):
             raise ValueError("LQR virtual control must have shape (2,)")

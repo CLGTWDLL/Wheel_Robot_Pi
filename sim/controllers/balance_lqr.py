@@ -16,6 +16,66 @@ LEG_ROLL_DIFF_SIGNS: dict[str, float] = {
 }
 
 
+def _leg_common_to_pitch_coupling(model: Any, data: Any) -> float:
+    """实测 common-mode leg ctrl 对 base pitch_rate 的耦合系数 (rad/s² per N·m·leg)。
+
+    在当前 (qpos, qvel) snapshot 下 mj_forward 两次: ctrl=0 baseline 与 ctrl=(L:+1, R:+1)。
+    取 base pitch dof (root_qvel + 3) 的 qacc 差, 转换为 pitch_rate (= -wx) 加速度。
+
+    返回值约定: τ_L = τ_R = c 时, base pitch_rate_acc ≈ coupling * c。
+    实测在 standing pose ≈ -0.15 rad/s² per N·m·leg (两腿同号 +1 → body 向后仰)。
+
+    不修改 data 状态 (snapshot/restore)。
+    """
+    addresses = model_addresses(model)
+    qpos_save = np.array(data.qpos, copy=True)
+    qvel_save = np.array(data.qvel, copy=True)
+    ctrl_save = np.array(data.ctrl, copy=True)
+
+    try:
+        data.qvel[:] = 0.0
+        data.ctrl[:] = 0.0
+        mujoco.mj_forward(model, data)
+        pitch_dof = addresses.root_qvel + 3
+        qacc_pitch_base = float(data.qacc[pitch_dof])
+
+        for joint_name in MODEL_SEMANTICS.leg_motor_joints:
+            data.ctrl[addresses.actuators[joint_name]] = 1.0
+        mujoco.mj_forward(model, data)
+        qacc_pitch_pulse = float(data.qacc[pitch_dof])
+    finally:
+        data.qpos[:] = qpos_save
+        data.qvel[:] = qvel_save
+        data.ctrl[:] = ctrl_save
+        mujoco.mj_forward(model, data)
+
+    # state.pitch_rate 符号约定: pitch_rate = -wx (见 sim/state.py).
+    pitch_rate_acc = -(qacc_pitch_pulse - qacc_pitch_base)
+    if not np.isfinite(pitch_rate_acc):
+        raise ValueError("leg-common to pitch coupling probe produced non-finite result")
+    return pitch_rate_acc
+
+
+def wheel_ff_gain_for_leg_common(model: Any, data: Any) -> float:
+    """计算 wheel forward virtual torque 的 feedforward 增益, 用于抵消 VMC 共模 leg
+    torque 引起的 pitch 扰动。
+
+    原理:
+      continuous pitch_rate_acc 来自 leg common: coupling * τ_leg_common
+      continuous pitch_rate_acc 来自 wheel:      -1/(R*M*L) * τ_wheel_forward
+      抵消方程: τ_wheel_forward = coupling * τ_leg_common * R * M * L
+
+    返回 gain 使得 τ_wheel_ff = gain * τ_leg_common_average。
+    """
+    coupling = _leg_common_to_pitch_coupling(model, data)
+    pendulum_length = _com_height_above_wheels(model, data)
+    effective_mass = max(float(np.sum(model.body_mass)), 1e-6)
+    gain = coupling * WHEEL_RADIUS * effective_mass * pendulum_length
+    if not np.isfinite(gain):
+        raise ValueError("wheel feedforward gain non-finite")
+    return gain
+
+
 def compute_balance_lqr_gain(
     model: Any,
     data: Any,

@@ -161,18 +161,15 @@ class VmcController:
             trajectory = self.phase_machine.trajectory if self.phase_machine is not None else None
             lock_height = float(trajectory.h_high) if trajectory is not None else float(self.params.nominal_height)
             self.last_target_heights = {side: lock_height for side in LEG_CLOSED_LOOP}
-            # 空中姿态: 仅 pitch_rate 阻尼 (PD 加 K_p 位置项会发散 — 见下方注释)。
-            # τ_motor = -K_d * pitch_rate,两腿对称 → base 受反作用力矩。
-            # 经验值 K_d=1.5,limit ±3.5: pitch_rate 在 ~30ms 内被压到 ~0,
-            # 但残留 pitch 不归零 (无位置项)。
+            # 空中姿态: 仅 pitch_rate 阻尼 (PD 中不加 K_p 位置项)。
+            # τ_motor = -K_d * pitch_rate, 两腿对称同号 → 通过 5-bar 给 base 反向
+            # pitch 力矩。当前 pitch_kd=1.5, clip ±3.5 N·m 是实测稳定点。
             #
-            # 增大 K_d (e.g. 3.0 + ±10 limit) 让 pitch 反而漂移到 0.6 rad — 推测是
-            # 大力矩快速摆动 leg 反向,leg 角动量回流到 body 把 pitch 推到一边。
-            #
-            # 加 K_p * pitch (任意符号) 也发散到 0.6+ rad — 5-bar linkage 把电机力矩
-            # 传到 body 的耦合方向是 nonlinear/configuration-dependent,简单 PD 失效。
-            #
-            # 当前保守值 K_d=1.5 是实测在 [-0.05, -0.20] rad pitch drift 间最稳的。
+            # 为什么不加 K_p:
+            # FLIGHT 期间 leg gravity 摆动 + EXTEND 末期 leg 角动量回流给 base 一个
+            # 恒定 ~+2.3 N·m 的偏置 pitch 力矩, 让 pitch_rate 在 ~-1.5 rad/s 形成
+            # 稳态平衡. 若加位置项 P, 与该偏置形成正反馈环, 实测 pitch 发散到 ±0.6 rad.
+            # 因此只用 D 项, 接受残留稳态 pitch_rate (落地由 LAND 阶段吸收)。
             pitch_kd = 1.5   # N·m per (rad/s)
             attitude_torque = float(np.clip(
                 -pitch_kd * float(state.pitch_rate), -3.5, 3.5,
