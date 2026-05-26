@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import mujoco
@@ -106,6 +107,44 @@ def test_vmc_slews_nominal_height_and_reports_target_motor_rate(tmp_path: Path) 
         rtol=0.0,
         atol=2e-5,
     )
+
+
+def test_roll_leveling_uses_stand_roll_rate_without_contact_gate(tmp_path: Path) -> None:
+    model, data = _load_model(tmp_path)
+    controller = VmcController(
+        VmcParams(
+            nominal_height=0.142,
+            kp_motor=0.0,
+            kd_motor=0.0,
+            gravity_compensation_scale=0.0,
+            roll_level_kp_height=0.0,
+            roll_level_kd_height=0.002,
+            roll_level_offset_limit=0.020,
+        )
+    )
+    state = _state(model, data)
+
+    neutral = replace(state, roll=0.0, roll_rate=0.0, contact_count=len(LEG_CLOSED_LOOP))
+    controller(model, data, neutral)
+    neutral_left = controller.last_target_heights["left"]
+    neutral_right = controller.last_target_heights["right"]
+
+    stand_fast_roll = replace(state, roll=0.0, roll_rate=1.0, contact_count=len(LEG_CLOSED_LOOP))
+    controller(model, data, stand_fast_roll)
+    assert controller.last_target_heights["left"] > neutral_left
+    assert controller.last_target_heights["right"] < neutral_right
+
+    single_contact_roll = replace(state, roll=0.0, roll_rate=1.0, contact_count=len(LEG_CLOSED_LOOP) - 1)
+    controller(model, data, single_contact_roll)
+    assert controller.last_target_heights["left"] > neutral_left
+    assert controller.last_target_heights["right"] < neutral_right
+
+    left_wheel = body_id(model, LEG_CLOSED_LOOP["left"].wheel_body)
+    data.xipos[left_wheel, 2] += 0.010
+    full_contact_roll = replace(state, roll=0.0, roll_rate=0.0, contact_count=len(LEG_CLOSED_LOOP))
+    controller(model, data, full_contact_roll)
+    assert controller.last_target_heights["left"] < neutral_left
+    assert controller.last_target_heights["right"] > neutral_right
 
 
 def test_closed_loop_leg_motor_jacobian_matches_constrained_finite_difference(tmp_path: Path) -> None:

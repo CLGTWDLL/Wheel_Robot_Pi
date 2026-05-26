@@ -169,6 +169,35 @@ def test_positive_roll_virtual_torque_matches_measured_short_step_direction(tmp_
     assert after.roll - before.roll > 0.0
 
 
+def test_stand_lqr_roll_diff_does_not_write_leg_actuators(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    model, data = _stand_model(tmp_path)
+    addresses = model_addresses(model)
+    controller = CombinedController(STAND_PARAMS)
+    state = extract_sim_state(model, data)
+    left_leg, right_leg = MODEL_SEMANTICS.leg_motor_joints
+
+    roll_error = replace(
+        state,
+        roll=0.1,
+        roll_rate=0.0,
+        contact_count=2,
+    )
+    vmc_control = np.zeros(model.nu)
+    control = controller._stand_control(
+        model,
+        data,
+        roll_error,
+        float(model.opt.timestep),
+        vmc_control,
+        addresses,
+    )
+
+    assert control[addresses.actuators[left_leg]] == 0.0
+    assert control[addresses.actuators[right_leg]] == 0.0
+
+
 def test_airborne_zero_wheel_forward_torque_regardless_of_phase(tmp_path: Path) -> None:
     """contact_count==0 时,LQR 不应在两轮上产生同向 forward 力矩。
 
@@ -204,7 +233,34 @@ def test_airborne_zero_wheel_forward_torque_regardless_of_phase(tmp_path: Path) 
         f"baseline sanity: grounded with pitch error should drive forward torque, got {grounded_forward}"
     )
 
-    # 2) 空中 (FLIGHT): 同样的 pitch 误差应被钳到 0
+    # 2) STAND 下接触不足: 同样的 pitch 误差也应被钳到 0。上坡接触变轻时
+    # contact_count 会短暂变成 0/1，继续打轮力矩会让轮子空转，重新接触后
+    # 通过切向摩擦冲击 pitch。
+    stand_airborne = replace(
+        base_state,
+        pitch=0.1,
+        pitch_rate=0.0,
+        contact_count=0,
+    )
+    phase_machine.phase = JumpPhase.STAND
+    stand_airborne_forward = forward_mean(controller(model, data, stand_airborne))
+    assert stand_airborne_forward == 0.0, (
+        f"STAND (contact=0) must zero forward wheel torque, got {stand_airborne_forward}"
+    )
+
+    stand_single_contact = replace(
+        base_state,
+        pitch=0.1,
+        pitch_rate=0.0,
+        contact_count=1,
+    )
+    phase_machine.phase = JumpPhase.STAND
+    stand_single_contact_forward = forward_mean(controller(model, data, stand_single_contact))
+    assert stand_single_contact_forward == 0.0, (
+        f"STAND (contact=1) must zero forward wheel torque, got {stand_single_contact_forward}"
+    )
+
+    # 3) 空中 (FLIGHT): 同样的 pitch 误差应被钳到 0
     in_air_velocity = base_state.base_linear_velocity.copy()
     in_air_velocity[2] = 1.0  # 让 phase_machine 不会立刻从 FLIGHT 跳成 LAND
     airborne = replace(
@@ -222,7 +278,7 @@ def test_airborne_zero_wheel_forward_torque_regardless_of_phase(tmp_path: Path) 
         f"FLIGHT (contact=0) must zero forward wheel torque, got {flight_forward}"
     )
 
-    # 3) LAND 期间弹跳离地 (contact=0 但 phase=LAND): 同样应钳到 0
+    # 4) LAND 期间弹跳离地 (contact=0 但 phase=LAND): 同样应钳到 0
     # 这一案例覆盖 2026-05-20 用户 run 的真实失败模式: 第二次跳的 LAND 阶段
     # 多次 contact=0/2 振荡,期间 LQR 把轮速从 +37 推到 -433 rad/s 直接掀翻。
     traj.setup_land(h_contact=0.10, v_contact=-0.5, h_target=0.142)

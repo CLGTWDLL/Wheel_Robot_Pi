@@ -351,9 +351,15 @@ class CombinedController:
         lqr_control = self._lqr_controller(model, data, state)
         if lqr_control.shape != (2,):
             raise ValueError("LQR virtual control must have shape (2,)")
-        forward_torque = float(lqr_control[0])
-        roll_torque = float(lqr_control[1])
-        yaw_correction = self._compute_yaw_correction(state, dt)
+        if state.contact_count >= len(LEG_CLOSED_LOOP):
+            forward_torque = float(lqr_control[0])
+            yaw_correction = self._compute_yaw_correction(state, dt)
+        else:
+            forward_torque = 0.0
+            yaw_correction = 0.0
+        # Roll leveling is handled by VMC as differential leg-height targets.
+        # Do not also write LQR roll torque into the same leg actuators.
+        roll_torque = 0.0
 
         control = self._allocate_balance_control(model, forward_torque, roll_torque, yaw_correction, addresses)
         return self._merge_vmc_and_clip(model, control, vmc_control, addresses, JumpPhase.STAND)

@@ -32,8 +32,8 @@ STAND_PARAMS = CombinedParams(
         gravity_compensation_scale=1.0,
         max_height_rate=0.05,
         roll_level_kp_height=0.0,
-        roll_level_kd_height=0.0,
-        roll_level_offset_limit=0.0,
+        roll_level_kd_height=0.002,
+        roll_level_offset_limit=0.010,
     ),
     # 2026-05-16 retune after mass rebalance (10.24 kg → 2.20 kg).
     # B matrix scaled ~7× because B ∝ 1/(M·L) and CoM dropped 36 mm.
@@ -72,8 +72,8 @@ STAND_THEN_DRIVE_PARAMS = CombinedParams(
         land_kp_scale=0.5,
         land_kd_scale=2.5,
         roll_level_kp_height=0.0,
-        roll_level_kd_height=0.0,
-        roll_level_offset_limit=0.0,
+        roll_level_kd_height=0.002,
+        roll_level_offset_limit=0.010,
     ),
     q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
     r_diag=np.array([200.0, 400.0]),

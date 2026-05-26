@@ -21,9 +21,9 @@ from sim.state import actuator_id, body_id, extract_sim_state, model_addresses
 TARGET_RAMP_SURFACE_HEIGHT = 0.012
 SETTLE_DURATION = 1.0
 RAMP_ENTRY_MARGIN = 0.012
-EXPERIMENT_ROLL_LEVEL_KP_HEIGHT = 0.080
-EXPERIMENT_ROLL_LEVEL_KD_HEIGHT = 0.016
-EXPERIMENT_ROLL_LEVEL_OFFSET_LIMIT = 0.020
+EXPERIMENT_ROLL_LEVEL_KP_HEIGHT = 0.0
+EXPERIMENT_ROLL_LEVEL_KD_HEIGHT = 0.002
+EXPERIMENT_ROLL_LEVEL_OFFSET_LIMIT = 0.010
 
 
 @dataclass(frozen=True)
@@ -148,6 +148,10 @@ def run_single_wheel_ramp(
         params.vmc.roll_level_kp_height = EXPERIMENT_ROLL_LEVEL_KP_HEIGHT
         params.vmc.roll_level_kd_height = EXPERIMENT_ROLL_LEVEL_KD_HEIGHT
         params.vmc.roll_level_offset_limit = EXPERIMENT_ROLL_LEVEL_OFFSET_LIMIT
+    else:
+        params.vmc.roll_level_kp_height = 0.0
+        params.vmc.roll_level_kd_height = 0.0
+        params.vmc.roll_level_offset_limit = 0.0
     controller = CombinedController(params)
     controller.params.target_velocity = float(target_velocity)
     linear_cmd_act = actuator_id(model, "cmd_linear_x")

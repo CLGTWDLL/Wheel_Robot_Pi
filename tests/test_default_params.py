@@ -72,8 +72,8 @@ def test_params_from_dict_disables_roll_leveling_for_old_configs() -> None:
     assert restored.vmc.roll_level_offset_limit == 0.0
 
 
-def test_stand_params_keep_roll_leveling_disabled_by_default() -> None:
+def test_stand_params_enable_roll_leveling_by_default() -> None:
     assert STAND_PARAMS.r_diag.tolist() == [200.0, 400.0]
     assert STAND_PARAMS.vmc.roll_level_kp_height == 0.0
-    assert STAND_PARAMS.vmc.roll_level_kd_height == 0.0
-    assert STAND_PARAMS.vmc.roll_level_offset_limit == 0.0
+    assert STAND_PARAMS.vmc.roll_level_kd_height == 0.002
+    assert STAND_PARAMS.vmc.roll_level_offset_limit == 0.010

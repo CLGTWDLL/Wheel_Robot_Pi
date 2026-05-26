@@ -251,7 +251,7 @@ class VmcController:
         self._motor_jacobian_step_count += 1
 
         neutral_offsets = self._neutral_offsets(model, data)
-        roll_level_offsets = self._roll_level_height_offsets(phase, state)
+        roll_level_offsets = self._roll_level_height_offsets(model, data, phase, state)
 
         for side, geometry in LEG_CLOSED_LOOP.items():
             act_idx = addresses.actuators[geometry.motor_joint]
@@ -323,11 +323,22 @@ class VmcController:
         self._height_filtered += delta
         return self._height_filtered
 
-    def _roll_level_height_offsets(self, phase: JumpPhase, state: SimState) -> dict[str, float]:
+    def _roll_level_height_offsets(
+        self,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        phase: JumpPhase,
+        state: SimState,
+    ) -> dict[str, float]:
         if phase != JumpPhase.STAND:
             return {side: 0.0 for side in LEG_CLOSED_LOOP}
         limit = max(float(self.params.roll_level_offset_limit), 0.0)
-        offset = (
+        if limit <= 0.0:
+            return {side: 0.0 for side in LEG_CLOSED_LOOP}
+        left_wheel_z = float(data.xipos[body_id(model, LEG_CLOSED_LOOP["left"].wheel_body), 2])
+        right_wheel_z = float(data.xipos[body_id(model, LEG_CLOSED_LOOP["right"].wheel_body), 2])
+        terrain_offset = -0.5 * (left_wheel_z - right_wheel_z)
+        offset = terrain_offset + (
             float(self.params.roll_level_kp_height) * float(state.roll)
             + float(self.params.roll_level_kd_height) * float(state.roll_rate)
         )
