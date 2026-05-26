@@ -23,13 +23,12 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
         yaw_ki=0.67,
         target_yaw_rate=0.78,
         fixed_height=True,
-        lqr_height_bin_size=0.09,
+        lqr_height_bin_size=0.025,
         ff_gain=4.5,
     )
-    params.vmc.crouch_target_height = 0.091
-    params.vmc.crouch_duration = 0.21
-    params.vmc.land_kp_scale = 0.6
-    params.vmc.land_kd_scale = 2.7
+    params.vmc.kp_land = 17.5
+    params.vmc.kd_land = 4.2
+    params.vmc.flight_pitch_kd = 1.7
     params.vmc.roll_level_kp_height = 0.031
     params.vmc.roll_level_kd_height = 0.006
     params.vmc.roll_level_offset_limit = 0.005
@@ -50,10 +49,9 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
     assert restored.fixed_height is params.fixed_height
     assert restored.lqr_height_bin_size == params.lqr_height_bin_size
     assert restored.ff_gain == params.ff_gain
-    assert restored.vmc.crouch_target_height == params.vmc.crouch_target_height
-    assert restored.vmc.crouch_duration == params.vmc.crouch_duration
-    assert restored.vmc.land_kp_scale == params.vmc.land_kp_scale
-    assert restored.vmc.land_kd_scale == params.vmc.land_kd_scale
+    assert restored.vmc.kp_land == params.vmc.kp_land
+    assert restored.vmc.kd_land == params.vmc.kd_land
+    assert restored.vmc.flight_pitch_kd == params.vmc.flight_pitch_kd
     assert restored.vmc.roll_level_kp_height == params.vmc.roll_level_kp_height
     assert restored.vmc.roll_level_kd_height == params.vmc.roll_level_kd_height
     assert restored.vmc.roll_level_offset_limit == params.vmc.roll_level_offset_limit
@@ -70,6 +68,20 @@ def test_params_from_dict_disables_roll_leveling_for_old_configs() -> None:
     assert restored.vmc.roll_level_kp_height == 0.0
     assert restored.vmc.roll_level_kd_height == 0.0
     assert restored.vmc.roll_level_offset_limit == 0.0
+
+
+def test_params_from_dict_supplies_defaults_for_new_land_fields() -> None:
+    """旧 JSON 不含 kp_land/kd_land/flight_pitch_kd 时, fallback 到当前默认."""
+    data = params_to_dict(STAND_PARAMS)
+    data["vmc"].pop("kp_land")
+    data["vmc"].pop("kd_land")
+    data["vmc"].pop("flight_pitch_kd")
+
+    restored = params_from_dict(data)
+
+    assert restored.vmc.kp_land == 15.0
+    assert restored.vmc.kd_land == 3.5
+    assert restored.vmc.flight_pitch_kd == 1.5
 
 
 def test_stand_params_enable_roll_leveling_by_default() -> None:

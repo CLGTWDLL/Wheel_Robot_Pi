@@ -42,15 +42,12 @@ def run(nominal_height: float, duration: float = 4.0, jump_delay: float = 1.0) -
 
     params = deepcopy(STAND_PARAMS)
     params.vmc.nominal_height = nominal_height
-    params.vmc.crouch_target_height = 0.09
-    params.vmc.crouch_duration = 0.20
-    params.vmc.extend_offset = 0.03
     params.vmc.max_height_rate = 100.0
 
+    # NOTE: 此脚本是 jump_height_min 时代的旧产物, 当前 jump pipeline (轨迹规划)
+    # 没有这些 phase params 字段. 保留作为 archive — 跑前先修 pm.start_jump 调用.
     phase_params = JumpPhaseParams(
-        crouch_duration=0.20, crouch_target_height=0.09,
-        extend_duration=0.05, extend_timeout=1.00,
-        flight_timeout=0.60, land_duration=0.20,
+        flight_timeout=0.60,
     )
     pm = JumpPhaseMachine(phase_params)
     controller = CombinedController(params, phase_machine=pm)

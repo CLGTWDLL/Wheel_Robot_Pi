@@ -86,7 +86,6 @@ def test_vmc_slews_nominal_height_and_reports_target_motor_rate(tmp_path: Path) 
             nominal_height=0.140,
             kp_motor=0.0,
             kd_motor=0.0,
-            gravity_compensation_scale=0.0,
             max_height_rate=0.01,
         )
     )
@@ -116,7 +115,6 @@ def test_roll_leveling_uses_stand_roll_rate_without_contact_gate(tmp_path: Path)
             nominal_height=0.142,
             kp_motor=0.0,
             kd_motor=0.0,
-            gravity_compensation_scale=0.0,
             roll_level_kp_height=0.0,
             roll_level_kd_height=0.002,
             roll_level_offset_limit=0.020,

@@ -159,7 +159,7 @@ def _score_stand_then_drive(metrics: RolloutMetrics) -> float:
 
 def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
     """采样 CombinedParams。
-    
+
     Q/R/增益参数使用对数均匀分布，物理偏移量使用均匀分布。
     """
     return CombinedParams(
@@ -167,9 +167,8 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
             nominal_height=trial.suggest_float("nominal_height", 0.135, 0.148),
             kp_motor=trial.suggest_float("kp_motor", 10.0, 200.0, log=True),
             kd_motor=trial.suggest_float("kd_motor", 1.0, 30.0, log=True),
-            crouch_offset=trial.suggest_float("crouch_offset", -0.04, 0.02),
-            extend_offset=trial.suggest_float("extend_offset", 0.0, 0.12),
-            landing_damping=trial.suggest_float("landing_damping", 0.0, 3.0),
+            kp_land=trial.suggest_float("kp_land", 5.0, 60.0, log=True),
+            kd_land=trial.suggest_float("kd_land", 1.0, 10.0, log=True),
         ),
         q_diag=np.array([
             trial.suggest_float("q_pitch", 1000.0, 100000.0, log=True),
@@ -190,10 +189,13 @@ def _sample_combined_params(trial: optuna.Trial) -> CombinedParams:
 
 
 def _sample_phase_params(trial: optuna.Trial) -> JumpPhaseParams:
-    """采样跳跃相位参数。"""
+    """采样跳跃相位参数。
+
+    NOTE: 此函数目前 broken — jump scenario 在 _objective 里调用
+    machine.start_jump() 时未传 trajectory (API 已改). 调用 jump 场景前需要
+    先修这个调用点 + 选定 air_height_max 等 trajectory 参数.
+    """
     return JumpPhaseParams(
-        crouch_duration=trial.suggest_float("crouch_duration", 0.01, 0.20),
-        extend_duration=trial.suggest_float("extend_duration", 0.01, 0.20),
         flight_timeout=trial.suggest_float("flight_timeout", 0.05, 0.60),
     )
 
@@ -355,9 +357,8 @@ def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> Optimizat
             "nominal_height": max(0.135, min(0.148, STAND_PARAMS.vmc.nominal_height)),
             "kp_motor": max(10.0, min(200.0, STAND_PARAMS.vmc.kp_motor)),
             "kd_motor": max(1.0, min(30.0, STAND_PARAMS.vmc.kd_motor)),
-            "crouch_offset": max(-0.04, min(0.02, STAND_PARAMS.vmc.crouch_offset)),
-            "extend_offset": max(0.0, min(0.12, STAND_PARAMS.vmc.extend_offset)),
-            "landing_damping": max(0.0, min(3.0, STAND_PARAMS.vmc.landing_damping)),
+            "kp_land": max(5.0, min(60.0, STAND_PARAMS.vmc.kp_land)),
+            "kd_land": max(1.0, min(10.0, STAND_PARAMS.vmc.kd_land)),
             "q_pitch": max(1000.0, STAND_PARAMS.q_diag[0]),
             "q_pitch_rate": max(100.0, STAND_PARAMS.q_diag[1]),
             "q_roll": max(1000.0, STAND_PARAMS.q_diag[2]),
@@ -368,8 +369,6 @@ def optimize_parameters(xml_path: Path, config: OptimizationConfig) -> Optimizat
             "velocity_ki": max(0.005, STAND_PARAMS.velocity_ki),
             "pitch_lean_gain": max(0.005, STAND_PARAMS.pitch_lean_gain),
             "yaw_damping": max(0.1, STAND_PARAMS.yaw_damping),
-            "crouch_duration": max(0.01, DEFAULT_PHASE_PARAMS.crouch_duration),
-            "extend_duration": max(0.01, DEFAULT_PHASE_PARAMS.extend_duration),
             "flight_timeout": max(0.05, DEFAULT_PHASE_PARAMS.flight_timeout),
         })
 

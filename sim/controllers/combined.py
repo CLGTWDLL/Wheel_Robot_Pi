@@ -32,22 +32,36 @@ class CombinedParams:
       保持;轮 = 0 → 不积累轮速,避免落地反扭。
     - FALLEN: 全 0。
 
+    调参顺序 (实机/headless 通用, 详见 default_params.py 顶部说明):
+      VMC PD → LQR balance → forward (pitch_lean) → yaw → jump.
+
     Attributes:
         vmc: VMC 高度控制参数。
         q_diag: LQR 状态权重对角线 [pitch, pitch_rate, roll, roll_rate, wheel_vel]。
+            注意:Q[wheel_vel] 不应过大,否则 LQR 与外环 pitch_lean PI 争抢速度
+            跟踪权限 (见 default_params.py STAND_PARAMS 注释)。
         r_diag: LQR 虚拟控制权重对角线 [forward_wheel, roll_diff_leg]。
         target_velocity: 目标前进速度 (m/s)。可运行时修改。
-        pitch_lean_gain: 速度误差到目标 pitch 偏移的增益。
-        velocity_ki: 速度积分补偿增益。
+        pitch_lean_gain: 速度误差到目标 pitch 偏移的增益 (P)。
+        velocity_ki: 速度积分补偿增益 (I)。
         position_kp: 位置外环 P 增益 (1/s)。pos_err [m] → vel_ref 修正 [m/s]。
-        position_kd: 位置外环 D 增益 (无量纲)。base 水平速度反馈进 vel_ref,
+            仅 target_velocity≈0 时启用。
+        position_kd: 位置外环 D 增益。base 水平速度反馈进 vel_ref,
             提供位置-pitch 二阶环的阻尼。
         position_velocity_limit: 位置外环输出 vel_ref 修正幅度限制 (m/s)。
         yaw_damping: yaw 角速度比例阻尼增益 (P)。
         yaw_ki: yaw 角速度积分增益 (I)。
-        fixed_height: True 时 LQR gain 不随腿高变化 (单 bin);False 时按 bin 缓存。
-        lqr_height_bin_size: gain 缓存的 height bin 宽度 (m)。
-        ff_gain: 高度变化引起的 wheel velocity FF 系数。
+        target_yaw_rate: 目标 yaw 角速度 (rad/s)。
+        fixed_height: True 时 LQR gain 锁定在 _initialize_lqr 那一刻的值,
+            后续不再随几何变化重算 (适合 cmd_height 固定的场景, 节省 CPU)。
+            False (默认) 动态更新 LQR gain: 静止平地高度变化时沿 height
+            轴线性插值；移动或 roll-leveling 场景下只切换当前 (height_bin, roll_bin)
+            缓存，避免混合不同地形姿态的线性化结果。
+        lqr_height_bin_size: gain 缓存的 height bin 宽度 (m)。同一 bin 内插值
+            参数确定。默认 0.02 m, 对应 LUT 操作范围内 ~5 个 bin。
+        ff_gain: 高度变化引起的 wheel velocity FF 系数 (默认 0 = 禁用)。
+            仅 cmd_height 快速阶跃 pitch peak 不达标时启用; 启用后又把
+            height_rate 信号注入 LQR target[4], 跟 pitch_lean 路径有轻微耦合。
     """
     vmc: VmcParams
     q_diag: np.ndarray
@@ -63,7 +77,7 @@ class CombinedParams:
     target_yaw_rate: float = 0.0
     fixed_height: bool = True
     lqr_height_bin_size: float = 0.02
-    ff_gain: float = 1.0
+    ff_gain: float = 0.0
 
 
 class CombinedController:
@@ -75,11 +89,12 @@ class CombinedController:
         self._lqr_controller: LqrController | None = None
         self._velocity_integral: float = 0.0
         self._yaw_integral: float = 0.0
+        # Gain 表键 = (height_bin, roll_bin)。每个 roll_bin 第一次出现时一次性填满
+        # height 轴，避免 cmd_height 扫描时在控制循环里反复求解 DARE。
         self._lqr_gain_cache: dict[tuple[int, int], np.ndarray] = {}
-        # leg-common→pitch feedforward gain, 缓存与 LQR gain 同维度 (height_bin, roll_bin)
         self._wheel_ff_gain_cache: dict[tuple[int, int], float] = {}
+        self._prewarmed_roll_bins: set[int] = set()
         self._active_wheel_ff_gain: float = 0.0
-        self._active_lqr_gain_key: tuple[int, int] | None = None
         self._height_wheel_velocity_ff: float = 0.0
         self._last_phase = JumpPhase.STAND
         self._position_anchor: np.ndarray | None = None
@@ -91,37 +106,102 @@ class CombinedController:
 
     # ---------- LQR gain management ----------
 
+    def _bin_size(self) -> float:
+        return max(float(self.params.lqr_height_bin_size), 1e-6)
+
+    def _roll_bin(self, state: SimState) -> int:
+        return int(np.floor(float(state.roll) / 0.02))
+
     def _height_bin(self, state: SimState) -> int:
-        bin_size = max(float(self.params.lqr_height_bin_size), 1e-6)
-        return int(np.floor(float(state.base_position[2]) / bin_size))
+        return int(np.floor(float(state.base_position[2]) / self._bin_size()))
 
-    def _lqr_gain_key(self, model: Any, data: Any, state: SimState) -> tuple[int, int]:
-        del model, data
-        roll_bin = int(np.floor(float(state.roll) / 0.02))
-        return (self._height_bin(state), roll_bin)
+    def _height_table_bins(self) -> range:
+        lut = self.params.vmc.lut
+        bin_size = self._bin_size()
+        lo = int(np.floor(float(lut.h_min) / bin_size)) - 2
+        hi = int(np.ceil(float(lut.h_max) / bin_size)) + 2
+        return range(lo, hi + 1)
 
-    def _compute_lqr_gain(self, model: Any, data: Any) -> np.ndarray:
+    def _prewarm_lqr_height_table(self, model: Any, data: Any, h_bin: int, r_bin: int) -> None:
+        if r_bin in self._prewarmed_roll_bins:
+            return
+        gain = self._gain_for_bin(model, data, h_bin, r_bin)
+        ff = self._wheel_ff_for_bin(model, data, h_bin, r_bin)
+        for table_h_bin in self._height_table_bins():
+            self._lqr_gain_cache.setdefault((table_h_bin, r_bin), gain)
+            self._wheel_ff_gain_cache.setdefault((table_h_bin, r_bin), ff)
+        self._prewarmed_roll_bins.add(r_bin)
+
+    def _gain_for_bin(
+        self, model: Any, data: Any, h_bin: int, r_bin: int,
+    ) -> np.ndarray:
+        cached = self._lqr_gain_cache.get((h_bin, r_bin))
+        if cached is not None:
+            return cached
         from sim.controllers.balance_lqr import compute_balance_lqr_gain_5d
-        return compute_balance_lqr_gain_5d(model, data, self.params.q_diag, self.params.r_diag)
+        gain = compute_balance_lqr_gain_5d(
+            model, data, self.params.q_diag, self.params.r_diag,
+        )
+        self._lqr_gain_cache[(h_bin, r_bin)] = gain
+        return gain
 
-    def _compute_wheel_ff_gain(self, model: Any, data: Any) -> float:
+    def _wheel_ff_for_bin(
+        self, model: Any, data: Any, h_bin: int, r_bin: int,
+    ) -> float:
+        cached = self._wheel_ff_gain_cache.get((h_bin, r_bin))
+        if cached is not None:
+            return cached
         from sim.controllers.balance_lqr import wheel_ff_gain_for_leg_common
-        return wheel_ff_gain_for_leg_common(model, data)
+        ff = wheel_ff_gain_for_leg_common(model, data)
+        self._wheel_ff_gain_cache[(h_bin, r_bin)] = ff
+        return ff
+
+    def _interpolated_lqr_inputs(
+        self, model: Any, data: Any, state: SimState,
+    ) -> tuple[np.ndarray, float]:
+        h_bin = self._height_bin(state)
+        r_bin = self._roll_bin(state)
+        if not self._should_interpolate_height_gain(state):
+            return (
+                self._gain_for_bin(model, data, h_bin, r_bin),
+                self._wheel_ff_for_bin(model, data, h_bin, r_bin),
+            )
+
+        self._prewarm_lqr_height_table(model, data, h_bin, r_bin)
+        h = float(state.base_position[2])
+        center_position = h / self._bin_size() - 0.5
+        h_lo = int(np.floor(center_position))
+        h_hi = h_lo + 1
+        alpha = float(np.clip(center_position - h_lo, 0.0, 1.0))
+
+        gain_lo = self._gain_for_bin(model, data, h_lo, r_bin)
+        gain_hi = self._gain_for_bin(model, data, h_hi, r_bin)
+        ff_lo = self._wheel_ff_for_bin(model, data, h_lo, r_bin)
+        ff_hi = self._wheel_ff_for_bin(model, data, h_hi, r_bin)
+        return (
+            (1.0 - alpha) * gain_lo + alpha * gain_hi,
+            (1.0 - alpha) * ff_lo + alpha * ff_hi,
+        )
+
+    def _should_interpolate_height_gain(self, state: SimState) -> bool:
+        if self.params.fixed_height:
+            return False
+        if abs(float(self.params.target_velocity)) > 1e-6:
+            return False
+        if abs(float(state.roll)) >= 0.015 or abs(float(state.roll_rate)) >= 0.2:
+            return False
+        vmc = self.params.vmc
+        return not (
+            abs(float(vmc.roll_level_kp_height)) > 1e-12
+            or abs(float(vmc.roll_level_kd_height)) > 1e-12
+            or abs(float(vmc.roll_level_offset_limit)) > 1e-12
+        )
 
     def _initialize_lqr(self, model: Any, data: Any, state: SimState) -> None:
         if not np.isfinite(self.params.target_velocity):
             raise ValueError("target_velocity must be finite")
-        gain_key = self._lqr_gain_key(model, data, state)
-        gain = self._lqr_gain_cache.get(gain_key)
-        if gain is None:
-            gain = self._compute_lqr_gain(model, data)
-            self._lqr_gain_cache[gain_key] = gain
-        ff_gain = self._wheel_ff_gain_cache.get(gain_key)
-        if ff_gain is None:
-            ff_gain = self._compute_wheel_ff_gain(model, data)
-            self._wheel_ff_gain_cache[gain_key] = ff_gain
+        gain, ff_gain = self._interpolated_lqr_inputs(model, data, state)
         self._active_wheel_ff_gain = ff_gain
-        self._active_lqr_gain_key = gain_key
         self._equilibrium_pitch = equilibrium_pitch_from_geometry(model, data)
         target = balance_tangent_state_5d(model, data, state).copy()
         target[0] = self._equilibrium_pitch
@@ -134,20 +214,9 @@ class CombinedController:
     def _ensure_lqr_height_bin(self, model: Any, data: Any, state: SimState) -> None:
         if self._lqr_controller is None:
             return
-        gain_key = self._lqr_gain_key(model, data, state)
-        if gain_key == self._active_lqr_gain_key:
-            return
-        gain = self._lqr_gain_cache.get(gain_key)
-        if gain is None:
-            gain = self._compute_lqr_gain(model, data)
-            self._lqr_gain_cache[gain_key] = gain
-        ff_gain = self._wheel_ff_gain_cache.get(gain_key)
-        if ff_gain is None:
-            ff_gain = self._compute_wheel_ff_gain(model, data)
-            self._wheel_ff_gain_cache[gain_key] = ff_gain
+        gain, ff_gain = self._interpolated_lqr_inputs(model, data, state)
         self._lqr_controller.gain = gain
         self._active_wheel_ff_gain = ff_gain
-        self._active_lqr_gain_key = gain_key
 
     # ---------- Height feedforward ----------
 
@@ -292,7 +361,6 @@ class CombinedController:
         self._yaw_integral = 0.0
         self._height_wheel_velocity_ff = 0.0
         self._lqr_controller = None
-        self._active_lqr_gain_key = None
         self._position_anchor = None
 
     def _handle_stand_entry(self, state: SimState) -> None:

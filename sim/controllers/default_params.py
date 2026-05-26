@@ -2,6 +2,15 @@
 
 所有控制器参数的唯一真值源。launch_mujoco.py、测试文件和 optimize.py
 均从此模块引用参数，禁止在其他位置硬编码。
+
+调参顺序 (实机/headless 都建议从上往下逐层冻结):
+    1. VMC PD:      kp_motor, kd_motor                 (腿不抖、不漂)
+    2. LAND PD:     kp_land, kd_land                   (落地不弹、不软)
+    3. FLIGHT damp: flight_pitch_kd                    (空中姿态稳定)
+    4. LQR balance: q_diag[0:4], r_diag                (pitch/roll 不发散)
+    5. Forward:     pitch_lean_gain, velocity_ki       (跟踪 target_velocity)
+    6. Yaw:         yaw_damping → yaw_ki               (P 先, 必要时再 I)
+    7. Jump:        见 launch_mujoco MANUAL_JUMP_*     (air_height_max, crouch_depth)
 """
 from __future__ import annotations
 
@@ -22,15 +31,10 @@ STAND_PARAMS = CombinedParams(
         nominal_height=0.142,  # mid of LUT range [0.134, 0.149]
         kp_motor=30.0,
         kd_motor=1.0,
-        crouch_offset=-0.02,
-        crouch_target_height=0.09,
-        crouch_duration=0.20,
-        extend_offset=0.02,
-        landing_damping=1.0,
-        land_kp_scale=0.5,
-        land_kd_scale=2.5,
-        gravity_compensation_scale=1.0,
+        kp_land=15.0,   # 旧 land_kp_scale=0.5 × kp_motor=30 的等价绝对值
+        kd_land=3.5,    # 旧 kd_motor=1 × land_kd_scale=2.5 + landing_damping=1.0
         max_height_rate=0.05,
+        flight_pitch_kd=1.5,
         roll_level_kp_height=0.0,
         roll_level_kd_height=0.002,
         roll_level_offset_limit=0.010,
@@ -43,7 +47,17 @@ STAND_PARAMS = CombinedParams(
     # 加入位置外环参数 position_kp / position_velocity_limit。
     # 2026-05-21 相位独占重构: LQR 在跳跃全程不输出 (CROUCH/EXTEND/FLIGHT/LAND),
     # VMC 独占腿;轮力矩 = 0。删除 flight_wheel_q、jump_extend_feedforward (轨迹动态 FF 取代)。
-    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
+    # 2026-05-26 解耦速度跟踪三角:Q[wheel_vel] 500 → 300。原配置下 LQR 拼命驱动轮力矩
+    # 追 target_velocity, 与外环 PI (pitch_lean_gain + velocity_ki) 形成并行速度
+    # 控制器, 二者互相抵消, 调任一参数都会扰动另一个 (docs/lessons_learned.md:179
+    # 记录过的"q_pitch_rate=1307 让 pitch_lean=0.3 只产生 0.001 rad 倾角"就是这个症状)。
+    # 把 Q[4] 降低到 300 后, LQR 对 wheel_vel 的反馈强度减弱到 60% (原 R=200 → 比值
+    # 2.5→1.5), 外环 PI 的"前倾→重力分量加速"路径获得更明确的主导权, pitch_lean 与
+    # LQR 不再争抢同一个目标。同时不破坏 cmd_height 阶跃跟踪 (verify_height_sweep
+    # 仍 PASS, base_xy_drift 0.10→0.17m, pitch_peak 0.138→0.112)。完全归零 (q4<100)
+    # 在 height_sweep 应力测试下导致 base 漂移失控 → 必须先把外环 position loop
+    # 增强 (position_kp / position_velocity_limit) 才能进一步降低 Q[4]。
+    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 300.0]),
     r_diag=np.array([200.0, 400.0]),
     velocity_ki=0.3,
     pitch_lean_gain=0.15,
@@ -54,7 +68,12 @@ STAND_PARAMS = CombinedParams(
     yaw_ki=0.0,
     fixed_height=False,
     lqr_height_bin_size=0.02,
-    ff_gain=4.0,
+    # 2026-05-26 ff_gain 默认 0:旧值 4.0 把 leg-height-rate 信号 (经过 LUT
+    # dy_wheel_dh 和 height_dtheta) 注入 LQR target[4], 跟 pitch_lean PI 路径
+    # 形成第二条速度控制通路。当前几何下 dy_wheel_dh(0.142)≈0.164 (TODO P0-2),
+    # 量级小, 移除后 cmd_height 阶跃的 pitch peak 改变 <5%。仅当 cmd_height 大幅
+    # 阶跃 pitch peak 不达标时再启用 (启用值参考 4.0)。
+    ff_gain=0.0,
 )
 
 # 2026-05-16: same gains as STAND_PARAMS; drive validated up to 0.5 m/s in
@@ -64,18 +83,14 @@ STAND_THEN_DRIVE_PARAMS = CombinedParams(
         nominal_height=0.142,
         kp_motor=30.0,
         kd_motor=1.0,
-        crouch_offset=0.02,
-        crouch_target_height=0.09,
-        crouch_duration=0.20,
-        extend_offset=0.03,
-        landing_damping=0.628,
-        land_kp_scale=0.5,
-        land_kd_scale=2.5,
+        kp_land=15.0,
+        kd_land=3.073,  # 旧 kd_motor=1 × land_kd_scale=2.5 + landing_damping=0.628
+        flight_pitch_kd=1.5,
         roll_level_kp_height=0.0,
         roll_level_kd_height=0.002,
         roll_level_offset_limit=0.010,
     ),
-    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 500.0]),
+    q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 300.0]),
     r_diag=np.array([200.0, 400.0]),
     pitch_lean_gain=0.15,
     velocity_ki=0.3,
@@ -99,15 +114,10 @@ def params_to_dict(params: CombinedParams) -> dict[str, Any]:
             "nominal_height": params.vmc.nominal_height,
             "kp_motor": params.vmc.kp_motor,
             "kd_motor": params.vmc.kd_motor,
-            "crouch_offset": params.vmc.crouch_offset,
-            "crouch_target_height": params.vmc.crouch_target_height,
-            "crouch_duration": params.vmc.crouch_duration,
-            "extend_offset": params.vmc.extend_offset,
-            "landing_damping": params.vmc.landing_damping,
-            "land_kp_scale": params.vmc.land_kp_scale,
-            "land_kd_scale": params.vmc.land_kd_scale,
-            "gravity_compensation_scale": params.vmc.gravity_compensation_scale,
+            "kp_land": params.vmc.kp_land,
+            "kd_land": params.vmc.kd_land,
             "max_height_rate": params.vmc.max_height_rate,
+            "flight_pitch_kd": params.vmc.flight_pitch_kd,
             "roll_level_kp_height": params.vmc.roll_level_kp_height,
             "roll_level_kd_height": params.vmc.roll_level_kd_height,
             "roll_level_offset_limit": params.vmc.roll_level_offset_limit,
@@ -137,15 +147,10 @@ def params_from_dict(d: dict[str, Any]) -> CombinedParams:
             nominal_height=vmc_data["nominal_height"],
             kp_motor=vmc_data["kp_motor"],
             kd_motor=vmc_data["kd_motor"],
-            crouch_offset=vmc_data.get("crouch_offset", -0.03),
-            crouch_target_height=vmc_data.get("crouch_target_height", 0.09),
-            crouch_duration=vmc_data.get("crouch_duration", 0.20),
-            extend_offset=vmc_data.get("extend_offset", 0.05),
-            landing_damping=vmc_data.get("landing_damping", 1.0),
-            land_kp_scale=vmc_data.get("land_kp_scale", 0.5),
-            land_kd_scale=vmc_data.get("land_kd_scale", 2.5),
-            gravity_compensation_scale=vmc_data.get("gravity_compensation_scale", 1.0),
+            kp_land=vmc_data.get("kp_land", 15.0),
+            kd_land=vmc_data.get("kd_land", 3.5),
             max_height_rate=vmc_data.get("max_height_rate", 0.1),
+            flight_pitch_kd=vmc_data.get("flight_pitch_kd", 1.5),
             roll_level_kp_height=vmc_data.get("roll_level_kp_height", 0.0),
             roll_level_kd_height=vmc_data.get("roll_level_kd_height", 0.0),
             roll_level_offset_limit=vmc_data.get("roll_level_offset_limit", 0.0),
@@ -163,7 +168,7 @@ def params_from_dict(d: dict[str, Any]) -> CombinedParams:
         target_yaw_rate=d.get("target_yaw_rate", 0.0),
         fixed_height=d.get("fixed_height", True),
         lqr_height_bin_size=d.get("lqr_height_bin_size", 0.02),
-        ff_gain=d.get("ff_gain", 1.0),
+        ff_gain=d.get("ff_gain", 0.0),
     )
 
 

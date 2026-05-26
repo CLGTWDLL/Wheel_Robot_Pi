@@ -42,6 +42,18 @@ LEG_CLOSED_LOOP: dict[str, LegClosedLoopGeometry] = {
 
 @dataclass
 class VmcParams:
+    """VMC leg-height + jump-phase controller parameters.
+
+    调参顺序 (实机/headless 都建议从上往下冻结):
+      1. nominal_height            — stand 站姿高度 (m), 必须在 LUT 范围内
+      2. kp_motor / kd_motor       — joint-space PD on active motor angle
+                                     (STAND/CROUCH/EXTEND 通用)
+      3. kp_land  / kd_land        — LAND 阶段独立 PD, 比 STAND 软 P 硬 D 吸冲击
+      4. flight_pitch_kd           — FLIGHT 期间对称腿 motor 上的 pitch_rate 阻尼
+      5. max_height_rate           — nominal_height 步进上限 (m/s)
+      6. roll_level_*              — STAND 斜坡找平偏置 (默认 0, 仅 ramp 实验启用)
+    """
+
     # nominal_height is runtime-writable so the cmd_height slider can drive VMC.
     nominal_height: float
     # Joint-space PID gains on the active leg motor angles. Combined with the
@@ -49,23 +61,17 @@ class VmcParams:
     # spring which was unstable near the 5-bar singularity.
     kp_motor: float
     kd_motor: float
-    crouch_offset: float = -0.03
-    crouch_target_height: float = 0.09
-    crouch_duration: float = 0.20
-    extend_offset: float = 0.05
-    # CROUCH / EXTEND target_height is clamped to ≥ jump_height_min.
-    # Below this, the closed-chain motor PD has no contact normal force to lean
-    # against (轮子离地或接触力很小), so dh/dθ enters the singular zone and
-    # extend feedforward drives θ past the LUT's monotonic range, producing
-    # the "leg fully extends into singularity" failure mode when jumping from
-    # a low STAND posture. STAND is unaffected — h=0.078 站立和移动仍可达，
-    # 因为接触力提供外部约束。
-    jump_height_min: float = 0.118
-    landing_damping: float = 1.0
-    land_kp_scale: float = 0.5
-    land_kd_scale: float = 2.5
-    gravity_compensation_scale: float = 1.0
+    # LAND 阶段独立的 PD 增益 (绝对值, 不是 STAND 增益的缩放). 落地需要软 P + 强 D
+    # 吸收冲击, 跟 STAND 跟踪目标的需求不同. 用绝对值消除"调 STAND 同时改 LAND"
+    # 的隐式耦合.
+    kp_land: float = 15.0
+    kd_land: float = 3.5
     max_height_rate: float = 0.1
+    # FLIGHT 期间对称腿 motor 上的 pitch_rate 阻尼增益 (N·m per rad/s).
+    # 见 _control() FLIGHT 分支注释 — 仅 D 项, 加 P 会与 leg-gravity 偏置形成正反馈.
+    flight_pitch_kd: float = 1.5
+    # STAND 斜坡找平: 用 roll/roll_rate 调左右腿高差实现自平衡.
+    # 默认 0 = off; 仅 scripts/verify_single_wheel_ramp.py 实验用.
     roll_level_kp_height: float = 0.0
     roll_level_kd_height: float = 0.0
     roll_level_offset_limit: float = 0.0
@@ -114,15 +120,10 @@ class VmcController:
             self.params.nominal_height,
             self.params.kp_motor,
             self.params.kd_motor,
-            self.params.crouch_offset,
-            self.params.crouch_target_height,
-            self.params.crouch_duration,
-            self.params.extend_offset,
-            self.params.landing_damping,
-            self.params.land_kp_scale,
-            self.params.land_kd_scale,
-            self.params.gravity_compensation_scale,
+            self.params.kp_land,
+            self.params.kd_land,
             self.params.max_height_rate,
+            self.params.flight_pitch_kd,
             self.params.roll_level_kp_height,
             self.params.roll_level_kd_height,
             self.params.roll_level_offset_limit,
@@ -163,14 +164,14 @@ class VmcController:
             self.last_target_heights = {side: lock_height for side in LEG_CLOSED_LOOP}
             # 空中姿态: 仅 pitch_rate 阻尼 (PD 中不加 K_p 位置项)。
             # τ_motor = -K_d * pitch_rate, 两腿对称同号 → 通过 5-bar 给 base 反向
-            # pitch 力矩。当前 pitch_kd=1.5, clip ±3.5 N·m 是实测稳定点。
+            # pitch 力矩。flight_pitch_kd 默认 1.5, clip ±3.5 N·m 是实测稳定点。
             #
             # 为什么不加 K_p:
             # FLIGHT 期间 leg gravity 摆动 + EXTEND 末期 leg 角动量回流给 base 一个
             # 恒定 ~+2.3 N·m 的偏置 pitch 力矩, 让 pitch_rate 在 ~-1.5 rad/s 形成
             # 稳态平衡. 若加位置项 P, 与该偏置形成正反馈环, 实测 pitch 发散到 ±0.6 rad.
             # 因此只用 D 项, 接受残留稳态 pitch_rate (落地由 LAND 阶段吸收)。
-            pitch_kd = 1.5   # N·m per (rad/s)
+            pitch_kd = float(self.params.flight_pitch_kd)
             attitude_torque = float(np.clip(
                 -pitch_kd * float(state.pitch_rate), -3.5, 3.5,
             ))
@@ -231,9 +232,11 @@ class VmcController:
             target_height = trajectory.land.height(t)
             target_h_dot = trajectory.land.velocity(t)
             target_h_ddot = trajectory.land.acceleration(t)
-            # LAND PD 加阻尼吸收冲击
-            kp_motor *= self.params.land_kp_scale
-            kd_motor = kd_motor * self.params.land_kd_scale + self.params.landing_damping
+            # LAND 用独立的绝对 PD 增益 (kp_land/kd_land), 与 STAND 解耦.
+            # 软 P + 硬 D 吸收落地冲击, 不再以 STAND kp_motor 的倍数表达,
+            # 避免"调 STAND 同时改 LAND"的隐式耦合.
+            kp_motor = float(self.params.kp_land)
+            kd_motor = float(self.params.kd_land)
         # STAND: 用 filtered nominal_height,target_h_ddot=0 (静态保持)
 
         control = np.zeros(model.nu)
@@ -292,12 +295,13 @@ class VmcController:
                 #   总 thrust = m_total * (g + ḧ_target)
                 #   每腿 τ_ff = (dh/dθ) * thrust / N_legs
                 # ḧ_target=0 时退化为标准重力补偿 (m*g*dh/dθ/N)。
+                # 始终按物理量计算, 不留 scale 旋钮 — 任何偏离 1× 都会让稳态高度
+                # 漂移, 必须靠 kp_motor 反推平衡, 把 PD 调参面变成 PD×FF 二维.
                 ff_torque = (
                     jacobian[side]
                     * total_mass
                     * (gravity + target_h_ddot)
                     / len(LEG_CLOSED_LOOP)
-                    * self.params.gravity_compensation_scale
                 )
 
             control[act_idx] = ff_torque + pid_torque

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import mujoco
@@ -13,6 +14,8 @@ from sim.controllers.balance_state import (
     balance_tangent_state_5d,
     balance_tangent_state_6d,
 )
+from sim.controllers.combined import CombinedController
+from sim.controllers.default_params import STAND_PARAMS
 from sim.model_xml import prepare_controlled_mujoco_xml
 from sim.state import extract_sim_state
 
@@ -77,8 +80,63 @@ def test_compute_balance_lqr_gain_5d_rejects_wrong_q_shape(tmp_path: Path) -> No
     import pytest
 
     model, data = _stand_model(tmp_path)
-    bad_q = np.array([1000.0, 200.0, 1000.0, 200.0, 50.0, 500.0])  # 6 维
+    bad_q = np.array([1000.0, 200.0, 1000.0, 200.0, 50.0, 500.0])
     r_diag = np.array([200.0, 400.0])
 
     with pytest.raises(ValueError, match="q_diag"):
         compute_balance_lqr_gain_5d(model, data, bad_q, r_diag)
+
+
+
+
+def test_combined_controller_prewarms_height_bins_without_online_lqr_solves(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import sim.controllers.balance_lqr as balance_lqr
+
+    model, data = _stand_model(tmp_path)
+    vmc_params = replace(
+        STAND_PARAMS.vmc,
+        roll_level_kp_height=0.0,
+        roll_level_kd_height=0.0,
+        roll_level_offset_limit=0.0,
+    )
+    params = replace(
+        STAND_PARAMS,
+        vmc=vmc_params,
+        q_diag=STAND_PARAMS.q_diag.copy(),
+        r_diag=STAND_PARAMS.r_diag.copy(),
+        fixed_height=False,
+    )
+    controller = CombinedController(params)
+    original = balance_lqr.compute_balance_lqr_gain_5d
+    calls = 0
+
+    def counted_gain(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(balance_lqr, "compute_balance_lqr_gain_5d", counted_gain)
+
+    state = extract_sim_state(model, data)
+    controller(model, data, state)
+    first_call_count = calls
+    assert first_call_count == 1
+    active_roll_bin = controller._roll_bin(state)
+
+    test_heights = np.linspace(params.vmc.lut.h_min, params.vmc.lut.h_max, 8)
+    for height in test_heights:
+        state = replace(
+            state,
+            base_position=np.array([
+                state.base_position[0],
+                state.base_position[1],
+                height,
+            ]),
+        )
+        assert controller._roll_bin(state) == active_roll_bin
+        controller._interpolated_lqr_inputs(model, data, state)
+
+    assert calls == first_call_count

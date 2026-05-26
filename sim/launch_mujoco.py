@@ -34,7 +34,7 @@ from sim.logger import setup_system_logger, TelemetryLogger, cleanup_old_logs
 # into 5-bar singularity" failure: when EXTEND fires 11.5 N·m feed-forward
 # torque without enough contact load to lean against, θ exits the LUT's
 # monotonic range and the leg locks into a fully-extended pose that can no
-# longer push down for lift-off (see sim/controllers/vmc.py jump_height_min).
+# longer push down for lift-off (see jump_trajectory.JumpTrajectoryParams.h_min).
 LEG_MOTOR_JOINT_NAMES: tuple[str, ...] = tuple(MODEL_SEMANTICS.leg_motor_joints)
 PASSIVE_JOINT_NAMES: tuple[str, ...] = tuple(MODEL_SEMANTICS.passive_joints)
 WHEEL_JOINT_NAMES: tuple[str, ...] = tuple(MODEL_SEMANTICS.wheel_joints)
@@ -706,14 +706,13 @@ def main() -> None:
     # Print the LUT motor-angle envelope so the per-bucket leg_motor[rad]
     # lines are immediately interpretable: when θ approaches theta_max during
     # EXTEND, the 5-bar is entering the singular fully-extended pose and the
-    # next FLIGHT/LAND is expected to collapse flat. jump_height_min sets the
-    # CROUCH/EXTEND/FLIGHT target_height floor; STAND can go below it because
-    # contact normal force constrains the linkage.
+    # next FLIGHT/LAND is expected to collapse flat. CROUCH/EXTEND target h
+    # 的下限现在由 JumpTrajectoryParams.h_min (≈ 0.0785) 控制; STAND 不受此
+    # 限制因为接触法向力约束闭链.
     lut = STAND_PARAMS.vmc.lut
     print(
         f"[joint-diag] LUT theta_range=[{lut.theta_min:+.3f}, {lut.theta_max:+.3f}] rad "
         f"h_range=[{lut.h_min:.3f}, {lut.h_max:.3f}] m "
-        f"jump_height_min={STAND_PARAMS.vmc.jump_height_min:.3f} m "
         f"motor_joints=left:{LEG_CLOSED_LOOP['left'].motor_joint} right:{LEG_CLOSED_LOOP['right'].motor_joint}",
         flush=True,
     )
