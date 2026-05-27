@@ -63,14 +63,14 @@ def _get_attr(obj: Any, name: str) -> Any:
 
 def _axis_value(axis: Any) -> float:
     if axis is None:
-        return 0.0
+        return float('nan')
     value = _get_attr(axis, "value")
     if value is None:
-        return 0.0
+        return float('nan')
     try:
         return float(value)
     except (TypeError, ValueError):
-        return 0.0
+        return float('nan')
 
 
 @dataclass(frozen=True)
@@ -144,6 +144,9 @@ class XboxGamepad:
         try:
             dev = hid.device()
             dev.open_path(info["path"])
+            set_nonblocking = getattr(dev, "set_nonblocking", None)
+            if callable(set_nonblocking):
+                set_nonblocking(True)
         except Exception as exc:
             logger.warning("Failed to open Xbox HID device: %s", exc)
             return None
@@ -177,10 +180,12 @@ class XboxGamepad:
                     lt=latest.lt,
                     rt=latest.rt,
                 )
+            if self._last_state is None:
+                return XboxState(left_x=float('nan'), left_y=float('nan'), lt=float('nan'), rt=float('nan'))
             return self._last_state
         except Exception as exc:
             logger.warning("HID read failed: %s", exc)
-            return None
+            return XboxState(left_x=float('nan'), left_y=float('nan'), lt=float('nan'), rt=float('nan'))
 
     def close(self) -> None:
         if self._closed:
@@ -202,36 +207,49 @@ class GCBluetoothGamepad:
         atexit.register(self.close)
 
     @classmethod
-    def try_open(cls, deadzone: float = 0.10) -> Optional["GCBluetoothGamepad"]:
+    def try_open(cls, deadzone: float = 0.10, fast: bool = False) -> Optional["GCBluetoothGamepad"]:
         try:
             import GameController
         except ImportError:
-            logger.info("pyobjc GameController not installed, bluetooth gamepad disabled")
+            if not fast:
+                logger.info("pyobjc GameController not installed, bluetooth gamepad disabled")
             return None
 
         controller_class = getattr(GameController, "GCController", None)
         if controller_class is None:
-            logger.info("GameController.framework unavailable")
+            if not fast:
+                logger.info("GameController.framework unavailable")
             return None
 
         controllers = list(controller_class.controllers() or [])
-        if not controllers:
+        if not controllers and not fast:
             try:
                 controller_class.startWirelessControllerDiscoveryWithCompletionHandler_(None)
             except Exception:
                 pass
-            for _ in range(40):
-                time.sleep(0.05)
-                controllers = list(controller_class.controllers() or [])
-                if controllers:
-                    break
+            try:
+                from Foundation import NSRunLoop, NSDate
+                loop = NSRunLoop.currentRunLoop()
+                for _ in range(40):
+                    date = NSDate.dateWithTimeIntervalSinceNow_(0.05)
+                    loop.runUntilDate_(date)
+                    controllers = list(controller_class.controllers() or [])
+                    if controllers:
+                        break
+            except ImportError:
+                for _ in range(40):
+                    time.sleep(0.05)
+                    controllers = list(controller_class.controllers() or [])
+                    if controllers:
+                        break
             try:
                 controller_class.stopWirelessControllerDiscovery()
             except Exception:
                 pass
 
         if not controllers:
-            logger.info("No Bluetooth controller found via GameController")
+            if not fast:
+                logger.info("No Bluetooth controller found via GameController")
             return None
 
         controller = controllers[0]
@@ -253,7 +271,7 @@ class GCBluetoothGamepad:
         if pad is None:
             pad = _get_attr(self._controller, "microGamepad")
         if pad is None:
-            return self._last_state
+            return XboxState(left_x=float('nan'), left_y=float('nan'), lt=float('nan'), rt=float('nan'))
 
         left = _get_attr(pad, "leftThumbstick") or _get_attr(pad, "dpad")
         lx = _axis_value(_get_attr(left, "xAxis"))
@@ -261,12 +279,16 @@ class GCBluetoothGamepad:
         lt = _axis_value(_get_attr(pad, "leftTrigger"))
         rt = _axis_value(_get_attr(pad, "rightTrigger"))
 
-        state = XboxState(
-            left_x=_apply_deadzone(_clamp(lx, -1.0, 1.0), self._deadzone),
-            left_y=_apply_deadzone(_clamp(ly, -1.0, 1.0), self._deadzone),
-            lt=_clamp(lt, 0.0, 1.0),
-            rt=_clamp(rt, 0.0, 1.0),
-        )
+        import math
+        if math.isnan(lx) or math.isnan(ly) or math.isnan(lt) or math.isnan(rt):
+            state = XboxState(left_x=lx, left_y=ly, lt=lt, rt=rt)
+        else:
+            state = XboxState(
+                left_x=_apply_deadzone(_clamp(lx, -1.0, 1.0), self._deadzone),
+                left_y=_apply_deadzone(_clamp(ly, -1.0, 1.0), self._deadzone),
+                lt=_clamp(lt, 0.0, 1.0),
+                rt=_clamp(rt, 0.0, 1.0),
+            )
         self._last_state = state
         return state
 
@@ -276,11 +298,72 @@ class GCBluetoothGamepad:
         self._closed = True
 
 
+class AutoGamepad:
+    """自动管理并无缝切换/升级手柄连接。
+    
+    在 macOS 上，startup 时 Cocoa run loop 还没启动，GCController 无法发现蓝牙手柄。
+    本类会先 fallback 到 hidapi (XboxGamepad) 打开手柄（此时能 open 但 read 读不出数据）；
+    随后在仿真循环的 poll() 中，自动并在后台以 0 阻塞方式周期性检测 native GameController
+    连接，一旦发现，便无缝升级到 GCBluetoothGamepad，使蓝牙手柄能正常工作。
+    """
+    def __init__(self, deadzone: float = 0.10) -> None:
+        self.deadzone = deadzone
+        self.device: Optional[GamepadDevice] = None
+        self._last_check = 0.0
+        self._try_init()
+
+    def _try_init(self) -> None:
+        import sys
+        if sys.platform == "darwin":
+            # 优先进行 non-blocking 的快速原生检测，避免 2s 阻塞
+            self.device = GCBluetoothGamepad.try_open(deadzone=self.deadzone, fast=True)
+            if self.device is not None:
+                return
+            self.device = XboxGamepad.try_open(deadzone=self.deadzone)
+        else:
+            self.device = XboxGamepad.try_open(deadzone=self.deadzone)
+            if self.device is None:
+                self.device = GCBluetoothGamepad.try_open(deadzone=self.deadzone, fast=True)
+
+    @property
+    def name(self) -> str:
+        return self.device.name if self.device is not None else "No Gamepad"
+
+    def poll(self) -> Optional[XboxState]:
+        if self.device is None:
+            self._try_init()
+            if self.device is None:
+                return XboxState(left_x=float('nan'), left_y=float('nan'), lt=float('nan'), rt=float('nan'))
+
+        state = self.device.poll()
+
+        # macOS 特殊逻辑：如果是 hidapi 打开的手柄（对于蓝牙手柄它能 open 但 poll 返回空/NaNs），
+        # 我们在运行中周期性检测并尝试升级到原生 GameController 路径
+        import sys
+        if sys.platform == "darwin" and isinstance(self.device, XboxGamepad):
+            now = time.time()
+            if now - self._last_check > 2.0:
+                self._last_check = now
+                native = GCBluetoothGamepad.try_open(deadzone=self.deadzone, fast=True)
+                if native is not None:
+                    logger.info("Automatically upgrading gamepad to native GameController: %s", native.name)
+                    self.device.close()
+                    self.device = native
+                    state = self.device.poll()
+
+        return state
+
+    def close(self) -> None:
+        if self.device is not None:
+            self.device.close()
+            self.device = None
+
+
 def open_gamepad(deadzone: float = 0.10) -> Optional[GamepadDevice]:
-    gamepad = XboxGamepad.try_open(deadzone=deadzone)
-    if gamepad is not None:
-        return gamepad
-    return GCBluetoothGamepad.try_open(deadzone=deadzone)
+    auto = AutoGamepad(deadzone=deadzone)
+    if auto.device is None:
+        return None
+    return auto
 
 
 @dataclass(frozen=True)

@@ -14,15 +14,19 @@ from sim.controllers.phase import JumpPhase, JumpPhaseMachine
 from sim.controllers.vmc import VmcController
 from sim.launch_mujoco import (
     MANUAL_JUMP_TRAJECTORY_PARAMS,
+    _apply_gamepad_state_to_sliders,
     _can_enable_gamepad,
     _read_cmd_sliders,
+    _read_gamepad_state,
     _restore_cmd_sliders,
     _trigger_jump_on_rising_edge,
     build_controlled_model,
     create_controlled_controller,
     parse_args,
+    run_controlled_viewer_loop,
     step_controlled_model,
 )
+from sim.gamepad import GamepadCommandMapper, XboxState
 from sim.model_xml import CMD_SLIDER_NAMES, prepare_controlled_mujoco_xml
 from sim.model_semantics import MODEL_SEMANTICS
 from sim.state import actuator_id, extract_sim_state, model_addresses
@@ -44,12 +48,105 @@ class _Logger:
         self.messages.append(message)
 
 
+class _FiniteGamepad:
+    name = "test gamepad"
+
+    def __init__(self, state: XboxState | None) -> None:
+        self.state = state
+
+    def poll(self) -> XboxState | None:
+        return self.state
+
+    def close(self) -> None:
+        pass
+
+
 def test_gamepad_is_disabled_by_default() -> None:
     args = parse_args([])
     logger = _Logger()
 
     assert not _can_enable_gamepad(logger, args)
     assert any("Gamepad disabled" in message for message in logger.messages)
+
+
+def test_invalid_gamepad_state_does_not_update_sliders(tmp_path: Path) -> None:
+    model, data = build_controlled_model(
+        Path("sim/robot/robot.urdf"),
+        cache_dir=tmp_path,
+        terrain=None,
+    )
+    mapper = GamepadCommandMapper(
+        linear_range=(-1.0, 1.0),
+        angular_range=(-3.0, 3.0),
+        height_range=(0.07844, 0.142),
+    )
+    original = _read_cmd_sliders(model, data)
+
+    invalid_state = _read_gamepad_state(_FiniteGamepad(XboxState(float("nan"), 1.0, 0.0, 0.0)))
+    _apply_gamepad_state_to_sliders(model, data, invalid_state, mapper)
+
+    assert _read_cmd_sliders(model, data) == original
+
+
+def test_run_controlled_viewer_loop_polls_gamepad_outside_viewer_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    model, data = build_controlled_model(
+        Path("sim/robot/robot.urdf"),
+        cache_dir=tmp_path,
+        terrain=None,
+    )
+    controller = create_controlled_controller("zero", "stand")
+
+    class _Viewer:
+        def __init__(self) -> None:
+            self.in_lock = False
+            self._running_calls = 0
+
+        def is_running(self) -> bool:
+            self._running_calls += 1
+            return self._running_calls == 1
+
+        def lock(self) -> "_Viewer":
+            return self
+
+        def __enter__(self) -> None:
+            self.in_lock = True
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            self.in_lock = False
+
+        def sync(self) -> None:
+            pass
+
+    viewer = _Viewer()
+
+    class _LockCheckingGamepad:
+        name = "lock checking gamepad"
+
+        def poll(self) -> XboxState:
+            assert not viewer.in_lock
+            return XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=0.0)
+
+        def close(self) -> None:
+            pass
+
+    times = iter([0.0] + [float(model.opt.timestep)] * 8)
+    monkeypatch.setattr("sim.launch_mujoco.time.perf_counter", lambda: next(times))
+
+    run_controlled_viewer_loop(
+        model,
+        data,
+        controller,
+        viewer,
+        gamepad=_LockCheckingGamepad(),
+        gamepad_mapper=GamepadCommandMapper(
+            linear_range=(-1.0, 1.0),
+            angular_range=(-3.0, 3.0),
+            height_range=(0.07844, 0.142),
+        ),
+    )
 
 
 def test_cmd_jump_is_non_physical_command_actuator(tmp_path: Path) -> None:

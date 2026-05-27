@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import sys
 import struct
+import types
 
 import pytest
 
 from sim.gamepad import (
     GamepadCommandMapper,
+    XboxGamepad,
     XboxState,
     _apply_deadzone,
     _parse_report,
@@ -107,3 +110,38 @@ def test_parse_report_handles_extreme_values() -> None:
     assert state is not None
     assert state.left_x == pytest.approx(-1.0)
     assert state.left_y == pytest.approx(1.0)
+
+
+def test_hid_backend_sets_nonblocking(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeDevice:
+        def __init__(self) -> None:
+            self.nonblocking: bool | None = None
+
+        def open_path(self, _path: bytes) -> None:
+            pass
+
+        def set_nonblocking(self, value: bool) -> None:
+            self.nonblocking = value
+
+        def close(self) -> None:
+            pass
+
+    opened = _FakeDevice()
+    fake_hid = types.SimpleNamespace(
+        enumerate=lambda vendor, product: [
+            {
+                "path": b"fake",
+                "vendor_id": vendor,
+                "product_id": product,
+                "product_string": "Fake Xbox",
+            }
+        ],
+        device=lambda: opened,
+    )
+    monkeypatch.setitem(sys.modules, "hid", fake_hid)
+
+    gamepad = XboxGamepad.try_open()
+
+    assert gamepad is not None
+    assert opened.nonblocking is True
+    gamepad.close()

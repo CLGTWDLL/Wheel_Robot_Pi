@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+import math
 
 # 确保项目根目录在 sys.path 中，使 sim 包可被正确导入
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -21,7 +22,7 @@ from sim.controllers.default_params import STAND_PARAMS
 from sim.controllers.phase import JumpPhase, JumpPhaseMachine, JumpPhaseParams
 from sim.controllers.jump_trajectory import JumpTrajectory, JumpTrajectoryParams
 from sim.controllers.vmc import LEG_CLOSED_LOOP, VmcController
-from sim.gamepad import GamepadCommandMapper, GamepadDevice, open_gamepad
+from sim.gamepad import GamepadCommandMapper, GamepadDevice, XboxState, open_gamepad
 from sim.model_semantics import MODEL_SEMANTICS
 from sim.model_xml import CMD_SLIDER_NAMES, prepare_controlled_mujoco_xml
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
@@ -518,17 +519,25 @@ def _build_gamepad_mapper(model: Any) -> GamepadCommandMapper | None:
     )
 
 
-def _apply_gamepad_to_sliders(
-    model: Any,
-    data: Any,
-    gamepad: GamepadDevice | None,
-    mapper: GamepadCommandMapper | None,
-) -> None:
-    """把手柄当前状态写入 cmd_* 滑块；无手柄或读取失败时不动滑块。"""
-    if gamepad is None or mapper is None:
-        return
+def _read_gamepad_state(gamepad: GamepadDevice | None) -> XboxState | None:
+    if gamepad is None:
+        return None
     state = gamepad.poll()
     if state is None:
+        return None
+    if not all(math.isfinite(value) for value in (state.left_x, state.left_y, state.lt, state.rt)):
+        return None
+    return state
+
+
+def _apply_gamepad_state_to_sliders(
+    model: Any,
+    data: Any,
+    state: XboxState | None,
+    mapper: GamepadCommandMapper | None,
+) -> None:
+    """把手柄状态写入 cmd_* 滑块；无有效状态时不动滑块。"""
+    if state is None or mapper is None:
         return
     linear_x, angular_z, height = mapper.map(state)
     for name, value in (
@@ -615,6 +624,9 @@ def run_controlled_viewer_loop(
     previous_jump_command = 0.0
     last_render = wall_start
     while viewer.is_running():
+        # GameController/hidapi I/O must stay outside viewer.lock(); otherwise a
+        # slow or blocking poll can stall the MuJoCo render thread on macOS.
+        gamepad_state = _read_gamepad_state(gamepad)
         # 计算墙钟时间对应的目标仿真时间
         wall_elapsed = time.perf_counter() - wall_start
         target_sim_time = sim_start + wall_elapsed
@@ -623,7 +635,7 @@ def run_controlled_viewer_loop(
         with viewer.lock():
             while data.time < target_sim_time and steps_this_frame < max_steps_per_frame:
                 # 手柄写入滑块（若有），随后按既有路径读取滑块值
-                _apply_gamepad_to_sliders(model, data, gamepad, gamepad_mapper)
+                _apply_gamepad_state_to_sliders(model, data, gamepad_state, gamepad_mapper)
                 # 读取用户滑块指令
                 cmd_sliders = _read_cmd_sliders(model, data)
                 linear_x = cmd_sliders["cmd_linear_x"]

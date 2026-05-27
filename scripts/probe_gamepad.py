@@ -1,6 +1,6 @@
-"""End-to-end smoke test for sim.gamepad (hidapi backend).
+"""End-to-end smoke test for sim.gamepad (native GameController/hidapi backend).
 
-Move left stick / squeeze LT / squeeze RT for 8 seconds. Each state change
+Move left stick / squeeze LT / squeeze RT for 30 seconds. Each state change
 prints a line showing parsed XboxState and mapped cmd_* values.
 """
 
@@ -26,13 +26,22 @@ def main() -> None:
         angular_range=(-3.0, 3.0),
         height_range=(0.07844, 0.142),
     )
-    print("Move left stick / press triggers for 8 seconds. Ctrl+C to stop.")
+    print("Move left stick / press triggers for 30 seconds. Ctrl+C to stop.")
     print("-" * 70)
 
     t0 = time.perf_counter()
     last = None
     try:
-        while time.perf_counter() - t0 < 8.0:
+        while time.perf_counter() - t0 < 30.0:
+            # Pump the Cocoa event loop for headless CLI environments
+            try:
+                from Foundation import NSRunLoop, NSDate
+                loop = NSRunLoop.currentRunLoop()
+                date = NSDate.dateWithTimeIntervalSinceNow_(0.01)
+                loop.runUntilDate_(date)
+            except ImportError:
+                pass
+
             state = g.poll()
             if state is not None:
                 cur = (round(state.left_x, 2), round(state.left_y, 2),
