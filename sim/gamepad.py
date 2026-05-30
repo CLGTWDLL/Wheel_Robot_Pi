@@ -2,13 +2,14 @@
 
 设计要点：
 - macOS Sequoia 自带的 `XboxSeriesXGamepad` DEXT 驱动通过 USB HID 暴露
-  **左摇杆 + LT + RT + 按键**。右摇杆数据走 Apple GameController.framework，
-  在这条 HID 路径上拿不到——所以本模块用**单摇杆驾驶**：左摇杆 Y 控线速度，
-  左摇杆 X 控 yaw，LT/RT 控高度。
+  **左摇杆 + LT + RT**。右摇杆和按键走 Apple GameController.framework，
+  在 HID 路径上拿不到 — HID 路径下 right_x/right_y/button_a 始终为 0/False。
+- 双摇杆驾驶（GCBluetoothGamepad 路径）：左摇杆 Y 控线速度（反向），
+  右摇杆 X 控 yaw，LT/RT 控高度，按键 A 触发跳跃。
 - DEXT 驱动只在控制器状态变化时发 HID 报文；idle 时 read() 返空。本类用
   `read(N, timeout_ms=0)` 排干当前可用报文，并缓存最后一次解析结果。
 - `close()` 显式释放 HID 句柄，避免进程异常退出后驱动卡住下一次 open。
-- Bluetooth 路径使用 GameController.framework（pyobjc）读取摇杆和扳机。
+- Bluetooth 路径使用 GameController.framework（pyobjc）读取双摇杆/扳机/按键。
 
 19 字节报文布局（report id 0x20）：
     b5-b6   LT      uint16 LE, 0..1023
@@ -73,15 +74,39 @@ def _axis_value(axis: Any) -> float:
         return float('nan')
 
 
+def _button_pressed(button: Any) -> bool:
+    """读取 GCControllerButtonInput.pressed/value，返回是否按下。"""
+    if button is None:
+        return False
+    pressed = _get_attr(button, "pressed")
+    if pressed is not None:
+        try:
+            return bool(pressed)
+        except (TypeError, ValueError):
+            pass
+    value = _get_attr(button, "value")
+    if value is None:
+        return False
+    try:
+        return float(value) > 0.5
+    except (TypeError, ValueError):
+        return False
+
+
 @dataclass(frozen=True)
 class XboxState:
-    """归一化手柄状态。`left_x` ∈ [-1, 1]（右为正），`left_y` ∈ [-1, 1]（上为正），
-    `lt` / `rt` ∈ [0, 1]。"""
+    """归一化手柄状态。`left_x`/`right_x` ∈ [-1, 1]（右为正），
+    `left_y`/`right_y` ∈ [-1, 1]（上为正），`lt`/`rt` ∈ [0, 1]，
+    `button_a` 表示 A 键是否按下。HID DEXT 路径只填左摇杆 + 扳机，
+    右摇杆与按键由 GameController.framework 蓝牙路径填充。"""
 
     left_x: float
     left_y: float
     lt: float
     rt: float
+    right_x: float = 0.0
+    right_y: float = 0.0
+    button_a: bool = False
 
 
 def _parse_report(data: bytes) -> Optional[XboxState]:
@@ -276,18 +301,30 @@ class GCBluetoothGamepad:
         left = _get_attr(pad, "leftThumbstick") or _get_attr(pad, "dpad")
         lx = _axis_value(_get_attr(left, "xAxis"))
         ly = _axis_value(_get_attr(left, "yAxis"))
+        right = _get_attr(pad, "rightThumbstick")
+        rx = _axis_value(_get_attr(right, "xAxis"))
+        ry = _axis_value(_get_attr(right, "yAxis"))
         lt = _axis_value(_get_attr(pad, "leftTrigger"))
         rt = _axis_value(_get_attr(pad, "rightTrigger"))
+        button_a = _button_pressed(_get_attr(pad, "buttonA"))
 
         import math
         if math.isnan(lx) or math.isnan(ly) or math.isnan(lt) or math.isnan(rt):
-            state = XboxState(left_x=lx, left_y=ly, lt=lt, rt=rt)
+            state = XboxState(left_x=lx, left_y=ly, lt=lt, rt=rt,
+                              right_x=0.0 if math.isnan(rx) else rx,
+                              right_y=0.0 if math.isnan(ry) else ry,
+                              button_a=button_a)
         else:
+            rx_clean = 0.0 if math.isnan(rx) else _apply_deadzone(_clamp(rx, -1.0, 1.0), self._deadzone)
+            ry_clean = 0.0 if math.isnan(ry) else _apply_deadzone(_clamp(ry, -1.0, 1.0), self._deadzone)
             state = XboxState(
                 left_x=_apply_deadzone(_clamp(lx, -1.0, 1.0), self._deadzone),
                 left_y=_apply_deadzone(_clamp(ly, -1.0, 1.0), self._deadzone),
                 lt=_clamp(lt, 0.0, 1.0),
                 rt=_clamp(rt, 0.0, 1.0),
+                right_x=rx_clean,
+                right_y=ry_clean,
+                button_a=button_a,
             )
         self._last_state = state
         return state
@@ -368,26 +405,36 @@ def open_gamepad(deadzone: float = 0.10) -> Optional[GamepadDevice]:
 
 @dataclass(frozen=True)
 class GamepadCommandMapper:
-    """把 XboxState 映射到 cmd_linear_x / cmd_angular_z / cmd_height。
+    """把 XboxState 映射到 cmd_linear_x / cmd_angular_z / cmd_height / cmd_jump。
 
-    单摇杆驾驶（DEXT 路径不暴露右摇杆）：
-      cmd_linear_x  ← left_y * linear_max
-      cmd_angular_z ← -left_x * angular_max   （左摇杆向右扳 → yaw 顺时针 → 负值）
-      cmd_height    ← mid + (rt - lt) * (height_high - height_low) / 2
+    双摇杆驾驶（GCBluetoothGamepad 路径，DEXT/HID 路径下右摇杆与按键为默认 0/False）：
+      cmd_linear_x  ← -left_y * linear_max   （左摇杆向前推 → 信号反向 → 负值）
+      cmd_angular_z ← -right_x * angular_max （右摇杆向右扳 → yaw 顺时针 → 负值）
+      cmd_height    ← current_height + (rt - lt) * height_rate * dt
+      cmd_jump      ← 1.0 if button_a else 0.0
     """
 
     linear_range: Tuple[float, float]
     angular_range: Tuple[float, float]
     height_range: Tuple[float, float]
+    height_rate: float = 0.04
 
-    def map(self, state: XboxState) -> Tuple[float, float, float]:
+    def map(
+        self,
+        state: XboxState,
+        *,
+        current_height: float | None = None,
+        dt: float = 0.0,
+    ) -> Tuple[float, float, float, float]:
         linear_max = max(abs(self.linear_range[0]), abs(self.linear_range[1]))
         angular_max = max(abs(self.angular_range[0]), abs(self.angular_range[1]))
         h_low, h_high = self.height_range
         h_mid = 0.5 * (h_low + h_high)
-        h_half = 0.5 * (h_high - h_low)
+        height_start = h_mid if current_height is None else float(current_height)
 
-        linear_x = float(np.clip(state.left_y * linear_max, *self.linear_range))
-        angular_z = float(np.clip(-state.left_x * angular_max, *self.angular_range))
-        height = float(np.clip(h_mid + (state.rt - state.lt) * h_half, h_low, h_high))
-        return linear_x, angular_z, height
+        linear_x = float(np.clip(-state.left_y * linear_max, *self.linear_range))
+        angular_z = float(np.clip(-state.right_x * angular_max, *self.angular_range))
+        height_delta = (state.rt - state.lt) * max(float(self.height_rate), 0.0) * max(float(dt), 0.0)
+        height = float(np.clip(height_start + height_delta, h_low, h_high))
+        jump = 1.0 if state.button_a else 0.0
+        return linear_x, angular_z, height, jump

@@ -61,7 +61,7 @@ def test_single_wheel_trapezoid_width_is_halved_without_changing_side_profile(tm
     assert platform_size[2] == 0.0175
 
 
-def test_rock_road_terrain_coexists_with_trapezoid(tmp_path: Path) -> None:
+def test_wavy_road_terrain_coexists_with_trapezoid(tmp_path: Path) -> None:
     model_path = prepare_controlled_mujoco_xml(
         Path("sim/robot/robot.urdf"),
         cache_dir=tmp_path,
@@ -73,25 +73,25 @@ def test_rock_road_terrain_coexists_with_trapezoid(tmp_path: Path) -> None:
     assert asset is not None
     assert worldbody is not None
 
-    hfield = asset.find("hfield[@name='rock_road_hfield']")
-    geom = worldbody.find("geom[@name='rock_road']")
+    hfield = asset.find("hfield[@name='wavy_road_hfield']")
+    geom = worldbody.find("geom[@name='wavy_road']")
     assert hfield is not None
     assert geom is not None
     assert geom.get("type") == "hfield"
-    assert geom.get("hfield") == "rock_road_hfield"
+    assert geom.get("hfield") == "wavy_road_hfield"
     assert geom.get("contype") == "1"
     assert geom.get("conaffinity") == "1"
-    assert _float_quad(hfield.get("size")) == (0.3, 0.6, 0.018, 0.02)
-    assert (tmp_path / "rock_road_hfield.png").is_file()
+    assert _float_quad(hfield.get("size")) == (0.3, 0.6, 0.036, 0.02)
+    assert (tmp_path / "wavy_road_hfield.png").is_file()
 
     model = mujoco.MjModel.from_xml_path(str(model_path))
-    hfield_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, "rock_road_hfield")
-    geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "rock_road")
+    hfield_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, "wavy_road_hfield")
+    geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "wavy_road")
     assert hfield_id >= 0
     assert geom_id >= 0
-    assert model.hfield_nrow[hfield_id] == 25
-    assert model.hfield_ncol[hfield_id] == 49
-    assert model.hfield_size[hfield_id].tolist() == [0.3, 0.6, 0.018, 0.02]
+    assert model.hfield_nrow[hfield_id] == 241
+    assert model.hfield_ncol[hfield_id] == 13
+    assert model.hfield_size[hfield_id].tolist() == [0.3, 0.6, 0.036, 0.02]
 
 
 def test_single_wheel_trapezoid_keeps_closed_loop_equality_constraints(tmp_path: Path) -> None:
@@ -135,11 +135,11 @@ def test_default_trapezoid_starts_ahead_of_initial_wheels(tmp_path: Path) -> Non
     assert ramp_min_y > initial_wheel_max_y + 0.02
 
 
-def test_default_rock_road_starts_after_spawn_and_trapezoid(tmp_path: Path) -> None:
+def test_default_wavy_road_starts_after_spawn_and_trapezoid(tmp_path: Path) -> None:
     model, data = build_controlled_model(Path("sim/robot/robot.urdf"), cache_dir=tmp_path)
 
-    road_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "rock_road")
-    road_hfield = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, "rock_road_hfield")
+    road_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "wavy_road")
+    road_hfield = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, "wavy_road_hfield")
     ramp_down = mujoco.mj_name2id(
         model,
         mujoco.mjtObj.mjOBJ_GEOM,
@@ -167,14 +167,14 @@ def test_launch_controlled_model_can_disable_default_trapezoid(tmp_path: Path) -
         mujoco.mjtObj.mjOBJ_GEOM,
         "single_wheel_trapezoid_platform",
     )
-    rock_road_geom = mujoco.mj_name2id(
+    wavy_road_geom = mujoco.mj_name2id(
         model,
         mujoco.mjtObj.mjOBJ_GEOM,
-        "rock_road",
+        "wavy_road",
     )
 
     assert terrain_geom == -1
-    assert rock_road_geom == -1
+    assert wavy_road_geom == -1
 
 
 def _float_triplet(value: str | None) -> tuple[float, float, float]:

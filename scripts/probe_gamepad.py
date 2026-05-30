@@ -45,14 +45,17 @@ def main() -> None:
             state = g.poll()
             if state is not None:
                 cur = (round(state.left_x, 2), round(state.left_y, 2),
-                       round(state.lt, 2), round(state.rt, 2))
+                       round(state.right_x, 2), round(state.right_y, 2),
+                       round(state.lt, 2), round(state.rt, 2),
+                       bool(state.button_a))
                 if cur != last:
                     last = cur
-                    lin, ang, h = mapper.map(state)
+                    lin, ang, h, jump = mapper.map(state)
                     print(
                         f"  lx={state.left_x:+.3f} ly={state.left_y:+.3f} "
-                        f"lt={state.lt:.3f} rt={state.rt:.3f}  ->  "
-                        f"lin={lin:+.3f} ang={ang:+.3f} h={h:.4f}",
+                        f"rx={state.right_x:+.3f} ry={state.right_y:+.3f} "
+                        f"lt={state.lt:.3f} rt={state.rt:.3f} A={state.button_a}  ->  "
+                        f"lin={lin:+.3f} ang={ang:+.3f} h={h:.4f} jump={jump:.0f}",
                         flush=True,
                     )
             time.sleep(0.02)

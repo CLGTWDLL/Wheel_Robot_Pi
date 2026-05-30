@@ -43,39 +43,77 @@ def _make_report(*, lt: int = 0, rt: int = 0, lx: int = 0, ly: int = 0) -> bytes
 
 def test_zero_state_yields_height_midpoint(mapper: GamepadCommandMapper) -> None:
     state = XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=0.0)
-    lin, ang, h = mapper.map(state)
+    lin, ang, h, jump = mapper.map(state)
     assert lin == 0.0
     assert ang == 0.0
     assert h == pytest.approx(0.5 * (HEIGHT_RANGE[0] + HEIGHT_RANGE[1]))
+    assert jump == 0.0
 
 
-def test_left_y_drives_linear(mapper: GamepadCommandMapper) -> None:
-    lin, _, _ = mapper.map(XboxState(left_x=0.0, left_y=1.0, lt=0.0, rt=0.0))
-    assert lin == pytest.approx(LINEAR_RANGE[1])
-    lin, _, _ = mapper.map(XboxState(left_x=0.0, left_y=-1.0, lt=0.0, rt=0.0))
+def test_left_y_drives_linear_with_sign_flip(mapper: GamepadCommandMapper) -> None:
+    # 用户要求：左摇杆 Y 控 linear_x，信号方向反一下（向前推 ly=+1 → linear_x 负向）
+    lin, _, _, _ = mapper.map(XboxState(left_x=0.0, left_y=1.0, lt=0.0, rt=0.0))
     assert lin == pytest.approx(LINEAR_RANGE[0])
+    lin, _, _, _ = mapper.map(XboxState(left_x=0.0, left_y=-1.0, lt=0.0, rt=0.0))
+    assert lin == pytest.approx(LINEAR_RANGE[1])
 
 
-def test_left_x_drives_yaw_with_sign_flip(mapper: GamepadCommandMapper) -> None:
-    _, ang, _ = mapper.map(XboxState(left_x=1.0, left_y=0.0, lt=0.0, rt=0.0))
+def test_right_x_drives_yaw_with_sign_flip(mapper: GamepadCommandMapper) -> None:
+    _, ang, _, _ = mapper.map(XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=0.0, right_x=1.0))
     assert ang == pytest.approx(-ANGULAR_RANGE[1])
-    _, ang, _ = mapper.map(XboxState(left_x=-1.0, left_y=0.0, lt=0.0, rt=0.0))
+    _, ang, _, _ = mapper.map(XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=0.0, right_x=-1.0))
     assert ang == pytest.approx(-ANGULAR_RANGE[0])
 
 
+def test_left_x_no_longer_drives_yaw(mapper: GamepadCommandMapper) -> None:
+    _, ang, _, _ = mapper.map(XboxState(left_x=1.0, left_y=0.0, lt=0.0, rt=0.0))
+    assert ang == 0.0
+
+
 def test_rt_raises_height(mapper: GamepadCommandMapper) -> None:
-    _, _, h = mapper.map(XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=1.0))
-    assert h == pytest.approx(HEIGHT_RANGE[1])
+    start = 0.10
+    _, _, h, _ = mapper.map(
+        XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=1.0),
+        current_height=start,
+        dt=0.5,
+    )
+    assert h == pytest.approx(start + mapper.height_rate * 0.5)
 
 
 def test_lt_lowers_height(mapper: GamepadCommandMapper) -> None:
-    _, _, h = mapper.map(XboxState(left_x=0.0, left_y=0.0, lt=1.0, rt=0.0))
-    assert h == pytest.approx(HEIGHT_RANGE[0])
+    start = 0.12
+    _, _, h, _ = mapper.map(
+        XboxState(left_x=0.0, left_y=0.0, lt=1.0, rt=0.0),
+        current_height=start,
+        dt=0.5,
+    )
+    assert h == pytest.approx(start - mapper.height_rate * 0.5)
+
+
+def test_released_triggers_keep_current_height(mapper: GamepadCommandMapper) -> None:
+    current = 0.125
+    _, _, h, _ = mapper.map(
+        XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=0.0),
+        current_height=current,
+        dt=1.0,
+    )
+    assert h == pytest.approx(current)
 
 
 def test_height_clamps_inside_ctrlrange(mapper: GamepadCommandMapper) -> None:
-    _, _, h = mapper.map(XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=2.0))
+    _, _, h, _ = mapper.map(
+        XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=2.0),
+        current_height=HEIGHT_RANGE[1],
+        dt=1.0,
+    )
     assert HEIGHT_RANGE[0] <= h <= HEIGHT_RANGE[1]
+
+
+def test_button_a_sets_jump_command(mapper: GamepadCommandMapper) -> None:
+    _, _, _, jump = mapper.map(XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=0.0, button_a=True))
+    assert jump == 1.0
+    _, _, _, jump = mapper.map(XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=0.0, button_a=False))
+    assert jump == 0.0
 
 
 def test_deadzone_zeroes_small_inputs() -> None:

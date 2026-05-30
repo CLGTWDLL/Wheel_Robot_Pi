@@ -151,8 +151,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--enable-gamepad",
-        action="store_true",
-        help="Enable hidapi-based gamepad input.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable HID/Bluetooth gamepad input (default: enabled).",
     )
     return parser.parse_args(argv)
 
@@ -535,15 +536,23 @@ def _apply_gamepad_state_to_sliders(
     data: Any,
     state: XboxState | None,
     mapper: GamepadCommandMapper | None,
+    dt: float = 0.0,
 ) -> None:
     """把手柄状态写入 cmd_* 滑块；无有效状态时不动滑块。"""
     if state is None or mapper is None:
         return
-    linear_x, angular_z, height = mapper.map(state)
+    height_act_id = actuator_id(model, "cmd_height")
+    current_height = float(data.ctrl[height_act_id]) if height_act_id >= 0 else None
+    linear_x, angular_z, height, jump = mapper.map(
+        state,
+        current_height=current_height,
+        dt=dt,
+    )
     for name, value in (
         ("cmd_linear_x", linear_x),
         ("cmd_angular_z", angular_z),
         ("cmd_height", height),
+        ("cmd_jump", jump),
     ):
         act_id = actuator_id(model, name)
         if act_id >= 0:
@@ -552,10 +561,10 @@ def _apply_gamepad_state_to_sliders(
 
 def _can_enable_gamepad(system_logger: Any, args: argparse.Namespace) -> bool:
     if not args.enable_gamepad:
-        system_logger.info("Gamepad disabled; sim will be driven by MuJoCo Control sliders.")
+        system_logger.info("Gamepad disabled via --no-enable-gamepad; using MuJoCo Control sliders.")
         return False
     if sys.platform == "darwin" and Path(sys.argv[0]).name == "mjpython":
-        system_logger.info("Gamepad enabled under mjpython on macOS (hidapi backend).")
+        system_logger.info("Gamepad enabled under mjpython on macOS (hidapi/GameController backend).")
     return True
 
 
@@ -632,10 +641,17 @@ def run_controlled_viewer_loop(
         target_sim_time = sim_start + wall_elapsed
         # 步进仿真直到追上目标时间或达到本帧步数上限
         steps_this_frame = 0
+        timestep = float(model.opt.timestep)
         with viewer.lock():
-            while data.time < target_sim_time and steps_this_frame < max_steps_per_frame:
+            while data.time + 0.5 * timestep < target_sim_time and steps_this_frame < max_steps_per_frame:
                 # 手柄写入滑块（若有），随后按既有路径读取滑块值
-                _apply_gamepad_state_to_sliders(model, data, gamepad_state, gamepad_mapper)
+                _apply_gamepad_state_to_sliders(
+                    model,
+                    data,
+                    gamepad_state,
+                    gamepad_mapper,
+                    dt=timestep,
+                )
                 # 读取用户滑块指令
                 cmd_sliders = _read_cmd_sliders(model, data)
                 linear_x = cmd_sliders["cmd_linear_x"]
@@ -670,13 +686,19 @@ def run_controlled_viewer_loop(
                 if not finite:
                     return
                 steps_this_frame += 1
-        # 若放弃追赶，将 sim_start 前移，避免下一帧继续累积追赶债务
-        if data.time < target_sim_time:
-            sim_start += target_sim_time - data.time
+        # 只有达到单帧步数上限且仍明显落后时才放弃追赶。
+        if steps_this_frame >= max_steps_per_frame and data.time + 0.5 * timestep < target_sim_time:
+            sim_start = data.time - wall_elapsed
         now = time.perf_counter()
         if now - last_render >= render_period:
             viewer.sync()
             last_render = now
+            now = time.perf_counter()
+        next_step_due = wall_start + max(float(data.time + timestep - sim_start), 0.0)
+        next_render_due = last_render + render_period
+        sleep_for = min(next_step_due, next_render_due) - now
+        if sleep_for > 0.0:
+            time.sleep(sleep_for)
 
 
 def _drive_velocity_profile(t: float) -> float:
@@ -778,14 +800,19 @@ def main() -> None:
         if args.scenario == "drive" and isinstance(controller, CombinedController):
             with mujoco.viewer.launch_passive(model, data) as viewer:
                 apply_viewer_settings(viewer)
+                render_period = 1.0 / 60.0
+                max_steps_per_frame = max(1, int(render_period / max(model.opt.timestep, 1e-6)) * 2)
                 wall_start = time.perf_counter()
                 sim_start = data.time
                 previous_jump_command = 0.0
+                last_render = wall_start
                 while viewer.is_running():
                     wall_elapsed = time.perf_counter() - wall_start
                     target_sim_time = sim_start + wall_elapsed
+                    steps_this_frame = 0
+                    timestep = float(model.opt.timestep)
                     with viewer.lock():
-                        while data.time < target_sim_time:
+                        while data.time + 0.5 * timestep < target_sim_time and steps_this_frame < max_steps_per_frame:
                             cmd_sliders = _read_cmd_sliders(model, data)
                             previous_jump_command = _trigger_jump_on_rising_edge(
                                 controller,
@@ -807,8 +834,20 @@ def main() -> None:
                             if not finite:
                                 system_logger.warning("Simulation stopped due to non-finite state or control.")
                                 break
+                            steps_this_frame += 1
                         else:
-                            viewer.sync()
+                            if steps_this_frame >= max_steps_per_frame and data.time + 0.5 * timestep < target_sim_time:
+                                sim_start = data.time - wall_elapsed
+                            now = time.perf_counter()
+                            if now - last_render >= render_period:
+                                viewer.sync()
+                                last_render = now
+                                now = time.perf_counter()
+                            next_step_due = wall_start + max(float(data.time + timestep - sim_start), 0.0)
+                            next_render_due = last_render + render_period
+                            sleep_for = min(next_step_due, next_render_due) - now
+                            if sleep_for > 0.0:
+                                time.sleep(sleep_for)
                             continue
                         break
         else:

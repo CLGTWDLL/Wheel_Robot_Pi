@@ -9,7 +9,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 from sim.mujoco_mesh_preprocess import prepare_mujoco_xml
-from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _add_connection_markers, _configure_geom_collisions
+from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _configure_geom_collisions
 
 urdf_path = Path("sim/robot/robot.urdf").resolve()
 tmp_dir = Path(tempfile.mkdtemp())

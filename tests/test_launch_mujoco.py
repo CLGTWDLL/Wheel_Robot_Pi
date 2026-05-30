@@ -61,8 +61,15 @@ class _FiniteGamepad:
         pass
 
 
-def test_gamepad_is_disabled_by_default() -> None:
+def test_gamepad_is_enabled_by_default() -> None:
     args = parse_args([])
+    logger = _Logger()
+
+    assert _can_enable_gamepad(logger, args)
+
+
+def test_gamepad_can_be_disabled_via_no_flag() -> None:
+    args = parse_args(["--no-enable-gamepad"])
     logger = _Logger()
 
     assert not _can_enable_gamepad(logger, args)
@@ -86,6 +93,41 @@ def test_invalid_gamepad_state_does_not_update_sliders(tmp_path: Path) -> None:
     _apply_gamepad_state_to_sliders(model, data, invalid_state, mapper)
 
     assert _read_cmd_sliders(model, data) == original
+
+
+def test_gamepad_triggers_increment_and_hold_cmd_height(tmp_path: Path) -> None:
+    model, data = build_controlled_model(
+        Path("sim/robot/robot.urdf"),
+        cache_dir=tmp_path,
+        terrain=None,
+    )
+    mapper = GamepadCommandMapper(
+        linear_range=(-1.0, 1.0),
+        angular_range=(-3.0, 3.0),
+        height_range=(0.07844, 0.142),
+        height_rate=0.04,
+    )
+    height_act = actuator_id(model, "cmd_height")
+    data.ctrl[height_act] = 0.10
+
+    _apply_gamepad_state_to_sliders(
+        model,
+        data,
+        XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=1.0),
+        mapper,
+        dt=0.5,
+    )
+    raised = float(data.ctrl[height_act])
+    assert raised == pytest.approx(0.12)
+
+    _apply_gamepad_state_to_sliders(
+        model,
+        data,
+        XboxState(left_x=0.0, left_y=0.0, lt=0.0, rt=0.0),
+        mapper,
+        dt=0.5,
+    )
+    assert float(data.ctrl[height_act]) == pytest.approx(raised)
 
 
 def test_run_controlled_viewer_loop_polls_gamepad_outside_viewer_lock(
@@ -134,6 +176,7 @@ def test_run_controlled_viewer_loop_polls_gamepad_outside_viewer_lock(
 
     times = iter([0.0] + [float(model.opt.timestep)] * 8)
     monkeypatch.setattr("sim.launch_mujoco.time.perf_counter", lambda: next(times))
+    monkeypatch.setattr("sim.launch_mujoco.time.sleep", lambda _seconds: None)
 
     run_controlled_viewer_loop(
         model,
@@ -147,6 +190,55 @@ def test_run_controlled_viewer_loop_polls_gamepad_outside_viewer_lock(
             height_range=(0.07844, 0.142),
         ),
     )
+
+
+def test_run_controlled_viewer_loop_does_not_fast_forward_after_frame_lag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    model, data = build_controlled_model(
+        Path("sim/robot/robot.urdf"),
+        cache_dir=tmp_path,
+        terrain=None,
+    )
+    controller = create_controlled_controller("zero", "stand")
+
+    class _Viewer:
+        def __init__(self) -> None:
+            self.now = 0.0
+            self.running_calls = 0
+
+        def is_running(self) -> bool:
+            self.running_calls += 1
+            if self.running_calls == 1:
+                self.now = 0.5
+            return self.running_calls <= 3
+
+        def lock(self) -> "_Viewer":
+            return self
+
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def sync(self) -> None:
+            pass
+
+    viewer = _Viewer()
+
+    def fake_sleep(seconds: float) -> None:
+        viewer.now += max(seconds, 0.0)
+
+    monkeypatch.setattr("sim.launch_mujoco.time.perf_counter", lambda: viewer.now)
+    monkeypatch.setattr("sim.launch_mujoco.time.sleep", fake_sleep)
+
+    run_controlled_viewer_loop(model, data, controller, viewer)
+
+    max_steps_per_frame = max(1, int((1.0 / 60.0) / float(model.opt.timestep)) * 2)
+    assert data.time <= (max_steps_per_frame + 2.5) * float(model.opt.timestep)
+    assert data.time < 0.5
 
 
 def test_cmd_jump_is_non_physical_command_actuator(tmp_path: Path) -> None:

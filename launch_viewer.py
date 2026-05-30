@@ -32,7 +32,7 @@ def main():
         sys.exit(1)
 
     # Load URDF via MuJoCo (handles oversized mesh splitting) and preprocess
-    from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _add_connection_markers, _configure_geom_collisions
+    from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _configure_geom_collisions
     tmp_dir = Path(tempfile.mkdtemp())
     converted_xml = _urdf_to_mjcf(urdf_path, tmp_dir)
 
@@ -112,9 +112,8 @@ def main():
     # Disable mesh collisions (avoid internal tension from non-convex CAD overlaps)
     _configure_geom_collisions(root)
 
-    # Add the virtual connections (equality constraints) and site markers
+    # Add the virtual connections (equality constraints).
     _ensure_equality_constraints(root)
-    _add_connection_markers(root)
 
     out_xml = Path(tempfile.mkdtemp()) / "check_model.xml"
     tree.write(out_xml, encoding="utf-8", xml_declaration=False)

@@ -30,15 +30,17 @@ class SingleWheelTrapezoidTerrain:
 
 
 @dataclass(frozen=True)
-class RockRoadTerrain:
+class WavyRoadTerrain:
+    """Washboard road: pure sinusoid along y (forward), constant across x."""
+
     y_start: float = 1.05
-    length: float = 1.20
-    width: float = 0.60
-    max_height: float = 0.018
+    length: float = 1.20          # along y (forward direction)
+    width: float = 0.60           # along x (lateral)
+    amplitude: float = 0.018      # half peak-to-peak; peak-to-peak = 36 mm = one wheel radius
+    wavelength: float = 0.35      # along y
     base_depth: float = 0.02
-    nrow: int = 25
-    ncol: int = 49
-    seed: int = 20260518
+    nrow: int = 241               # along y: ~5 mm/cell, ~70 cells per wavelength
+    ncol: int = 13                # along x: ~50 mm/cell, sufficient (profile constant in x)
 
 
 def _urdf_to_mjcf(urdf_path: Path, output_dir: Path) -> Path:
@@ -104,7 +106,6 @@ def prepare_controlled_mujoco_xml(
     _add_collision_proxies(root)
     _replace_actuators(root)
     _ensure_equality_constraints(root)
-    _add_connection_markers(root)
     _stiffen_leg_motor_joint_limits(root)
     _ensure_standing_keyframe(root)
 
@@ -191,7 +192,7 @@ def _ensure_test_terrain(root: ET.Element, terrain: str | None, terrain_side: st
     if terrain != "single_wheel_trapezoid":
         raise ValueError(f"unsupported terrain: {terrain}")
     _add_single_wheel_trapezoid(root, SingleWheelTrapezoidTerrain(side=terrain_side))
-    _add_rock_road(root, RockRoadTerrain(), output_root)
+    _add_wavy_road(root, WavyRoadTerrain(), output_root)
 
 
 def _add_single_wheel_trapezoid(root: ET.Element, config: SingleWheelTrapezoidTerrain) -> None:
@@ -266,37 +267,38 @@ def _terrain_box(
     ET.SubElement(worldbody, "geom", attrs)
 
 
-def _add_rock_road(root: ET.Element, config: RockRoadTerrain, output_root: Path) -> None:
+def _add_wavy_road(root: ET.Element, config: WavyRoadTerrain, output_root: Path) -> None:
     worldbody = root.find("worldbody")
     if worldbody is None:
         raise ValueError("MuJoCo XML is missing <worldbody>")
-    if worldbody.find("geom[@name='rock_road']") is not None:
+    if worldbody.find("geom[@name='wavy_road']") is not None:
         return
 
-    if min(config.length, config.width, config.max_height, config.base_depth) <= 0.0:
-        raise ValueError("rock road terrain dimensions must be positive")
+    if min(config.length, config.width, config.amplitude, config.wavelength, config.base_depth) <= 0.0:
+        raise ValueError("wavy road terrain dimensions must be positive")
     if config.nrow < 2 or config.ncol < 2:
-        raise ValueError("rock road heightfield resolution must be at least 2x2")
+        raise ValueError("wavy road heightfield resolution must be at least 2x2")
 
     asset = root.find("asset")
     if asset is None:
         asset = ET.SubElement(root, "asset")
 
-    heightmap_path = output_root / "rock_road_hfield.png"
-    iio.imwrite(heightmap_path, _rock_road_heightmap(config))
+    heightmap_path = output_root / "wavy_road_hfield.png"
+    iio.imwrite(heightmap_path, _wavy_road_heightmap(config))
 
-    if asset.find("hfield[@name='rock_road_hfield']") is None:
+    elevation = 2.0 * config.amplitude  # pixel [0,255] maps linearly to [0, 2A]
+    if asset.find("hfield[@name='wavy_road_hfield']") is None:
         ET.SubElement(
             asset,
             "hfield",
             {
-                "name": "rock_road_hfield",
+                "name": "wavy_road_hfield",
                 "file": str(heightmap_path),
                 "size": _format_float_quad(
                     (
                         0.5 * config.width,
                         0.5 * config.length,
-                        config.max_height,
+                        elevation,
                         config.base_depth,
                     )
                 ),
@@ -307,9 +309,9 @@ def _add_rock_road(root: ET.Element, config: RockRoadTerrain, output_root: Path)
         worldbody,
         "geom",
         {
-            "name": "rock_road",
+            "name": "wavy_road",
             "type": "hfield",
-            "hfield": "rock_road_hfield",
+            "hfield": "wavy_road_hfield",
             "pos": _format_float_triplet((0.0, config.y_start + 0.5 * config.length, 0.0)),
             "contype": "1",
             "conaffinity": "1",
@@ -319,33 +321,26 @@ def _add_rock_road(root: ET.Element, config: RockRoadTerrain, output_root: Path)
     )
 
 
-def _rock_road_heightmap(config: RockRoadTerrain) -> np.ndarray:
-    rng = np.random.default_rng(config.seed)
-    x = np.linspace(0.0, 1.0, config.ncol)
-    y = np.linspace(-1.0, 1.0, config.nrow)
-    xx, yy = np.meshgrid(x, y)
+def _wavy_road_heightmap(config: WavyRoadTerrain) -> np.ndarray:
+    y = np.linspace(-0.5 * config.length, 0.5 * config.length, config.nrow)
+    x = np.linspace(-0.5 * config.width, 0.5 * config.width, config.ncol)
 
-    rough = rng.uniform(0.0, 1.0, size=(config.nrow, config.ncol))
-    for _ in range(2):
-        rough = (
-            rough
-            + np.roll(rough, 1, axis=0)
-            + np.roll(rough, -1, axis=0)
-            + np.roll(rough, 1, axis=1)
-            + np.roll(rough, -1, axis=1)
-        ) / 5.0
-    waves = 0.5 + 0.25 * np.sin(2.0 * np.pi * (3.0 * xx + 0.35 * yy))
-    waves += 0.25 * np.sin(2.0 * np.pi * (5.0 * xx - 0.55 * yy + 0.2))
-    heights = 0.55 * rough + 0.45 * waves
-    heights -= float(np.min(heights))
-    peak = float(np.max(heights))
-    if peak > 0.0:
-        heights /= peak
+    profile = 0.5 + 0.5 * np.sin(2.0 * np.pi * y / config.wavelength)
+    heights = np.tile(profile[:, None], (1, config.ncol))
 
-    edge = 0.16
-    x_envelope = np.minimum(_smoothstep(x / edge), _smoothstep((1.0 - x) / edge))
-    y_edge = np.clip((1.0 - np.abs(y)) / 0.25, 0.0, 1.0)
-    envelope = np.outer(_smoothstep(y_edge), x_envelope)
+    # Smoothstep envelope so the patch fades into the surrounding floor instead
+    # of presenting a vertical step at its boundary.
+    fade_y = 0.18 * config.length
+    fade_x = 0.10 * config.width
+    fy = _smoothstep(np.minimum(
+        (y + 0.5 * config.length) / fade_y,
+        (0.5 * config.length - y) / fade_y,
+    ))
+    fx = _smoothstep(np.minimum(
+        (x + 0.5 * config.width) / fade_x,
+        (0.5 * config.width - x) / fade_x,
+    ))
+    envelope = np.outer(fy, fx)
     heights = np.clip(heights * envelope, 0.0, 1.0)
     return np.rint(heights * 255.0).astype(np.uint8)
 
@@ -628,43 +623,6 @@ def _ensure_equality_constraints(root: ET.Element) -> None:
             "solimp": "0.95 0.99 0.001 0.5 2",
         },
     )
-
-
-def _add_connection_markers(root: ET.Element) -> None:
-    worldbody = root.find("worldbody")
-    if worldbody is None:
-        return
-
-    # Find the bodies and add a red sphere site to them
-    for body in worldbody.iter("body"):
-        name = body.get("name")
-        if name == "link2_left":
-            # Avoid adding multiple times if re-run
-            if not any(s.get("name") == "marker_link23_left" for s in body.findall("site")):
-                ET.SubElement(
-                    body,
-                    "site",
-                    {
-                        "name": "marker_link23_left",
-                        "pos": "-0.02865 -0.00846 0.02459",
-                        "size": "0.005",
-                        "type": "sphere",
-                        "rgba": "1 0 0 1",
-                    },
-                )
-        elif name == "link2_right":
-            if not any(s.get("name") == "marker_link23_right" for s in body.findall("site")):
-                ET.SubElement(
-                    body,
-                    "site",
-                    {
-                        "name": "marker_link23_right",
-                        "pos": "-0.02869 0.00853 0.02452",
-                        "size": "0.005",
-                        "type": "sphere",
-                        "rgba": "1 0 0 1",
-                    },
-                )
 
 
 # Constraint-consistent symmetric standing pose. Both legs in the "low elbow"
