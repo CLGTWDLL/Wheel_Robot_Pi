@@ -49,6 +49,12 @@ MANUAL_JUMP_PHASE_PARAMS = JumpPhaseParams(
 MANUAL_JUMP_TRAJECTORY_PARAMS = JumpTrajectoryParams(
     crouch_duration=0.25,
     land_duration=0.25,
+    # extend_stroke: EXTEND 固定伸腿行程 (m)。h_high = h_low + extend_stroke (撞 h_safe_high
+    # 上限则下移窗口保持行程)。固定行程让不同 cmd_height 起跳的伸腿动力学一致, 注入机身的
+    # 后仰角动量一致 — 消除"低 cmd_height 起跳前倾/漂移远大于高 cmd_height"的问题。
+    # headless 扫描 (tmp/diagnose_jump_pitch.py): 0.045 下各 cmd_height 前倾峰值 0.25-0.39rad、
+    # 漂移 0.10-0.31m, 一致且远小于旧"固定终点 0.140"方案在低高度的 0.52rad/0.89m。
+    extend_stroke=0.045,
     # air_height_max 是 trajectory v_target 的 ballistic 等效高度 (cmd_jump=1.0 时),
     # 不是实测跳跃高度 — 实测约 25-30% 弹道增益 (motor 推不出全部 v_target,leg 接近
     # max extension 时弹跳损耗动能)。

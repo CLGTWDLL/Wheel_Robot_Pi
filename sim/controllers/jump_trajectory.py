@@ -197,9 +197,14 @@ class JumpTrajectoryParams:
 
     # LUT 安全区: h_min 是 LUT 数据下限, h_safe_high 避开奇异区 (theta_max=0.65 对应 h~0.154)。
     h_min: float = 0.0785
+    # h_safe_high 现在是 EXTEND 终点的上限 (ceiling), 不再是固定终点。
     h_safe_high: float = 0.140
     # CROUCH 自适应深度: target = max(h_min, h_start - crouch_depth)。
     crouch_depth: float = 0.05
+    # EXTEND 固定伸腿行程 (m): h_high = h_low + extend_stroke。固定行程让不同 cmd_height
+    # 起跳的伸腿动力学一致 (离地注入机身的后仰角动量一致), 消除低 cmd_height 起跳行程
+    # 过大导致的落地前倾/漂移。撞 h_safe_high 上限时整体下移窗口以保持行程 (见 JumpTrajectory)。
+    extend_stroke: float = 0.045
     # 时间剖面 (EXTEND 由 ConstantAccelerationTrajectory 自动计算 duration)。
     crouch_duration: float = 0.25
     land_duration: float = 0.25
@@ -242,7 +247,14 @@ class JumpTrajectory:
         self.v_takeoff = float(np.sqrt(2.0 * GRAVITY * max(self.h_air, 0.0)))
 
         h_low = params.adaptive_crouch_target(h_start)
-        h_high = float(params.h_safe_high)
+        # 固定 EXTEND 行程: h_high = h_low + extend_stroke。若超过 h_safe_high (避开奇异区
+        # 的上限) 则封顶, 并把整个起跳窗口下移 (h_low 随之下降, 不低于 h_min), 保持行程
+        # 一致。这样所有 cmd_height 起跳的伸腿行程相同 → 离地注入机身的后仰角动量相同,
+        # 不再出现低 cmd_height 起跳行程过大、落地前倾/漂移放大的现象。
+        h_high = h_low + float(params.extend_stroke)
+        if h_high > float(params.h_safe_high):
+            h_high = float(params.h_safe_high)
+            h_low = max(float(params.h_min), h_high - float(params.extend_stroke))
 
         self.h_low = h_low
         self.h_high = h_high

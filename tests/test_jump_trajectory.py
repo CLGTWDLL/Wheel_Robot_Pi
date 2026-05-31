@@ -46,7 +46,27 @@ def test_jump_trajectory_adaptive_crouch_from_high_height() -> None:
     traj = JumpTrajectory(params, h_start=0.142, cmd_jump_amplitude=1.0)
     # 从 0.142 蹲 5cm 到 0.092
     assert traj.h_low == pytest.approx(0.092, abs=1e-6)
+    # h_high = h_low + extend_stroke (0.092+0.045=0.137, 未撞 h_safe_high 上限)
+    assert traj.h_high == pytest.approx(0.092 + params.extend_stroke, abs=1e-6)
+    assert traj.h_high <= params.h_safe_high + 1e-9
+
+
+def test_jump_trajectory_fixed_stroke_shifts_window_at_ceiling() -> None:
+    params = JumpTrajectoryParams()
+    # 高站姿 0.153: adaptive h_low=0.103, h_low+stroke=0.148 超过 h_safe_high=0.140,
+    # 应封顶 h_high=0.140 并把窗口下移到 h_low=0.095, 保持 stroke=extend_stroke。
+    traj = JumpTrajectory(params, h_start=0.153, cmd_jump_amplitude=1.0)
     assert traj.h_high == pytest.approx(params.h_safe_high, abs=1e-9)
+    assert traj.h_high - traj.h_low == pytest.approx(params.extend_stroke, abs=1e-6)
+    assert traj.h_low >= params.h_min - 1e-9
+
+
+def test_jump_trajectory_fixed_stroke_constant_across_heights() -> None:
+    params = JumpTrajectoryParams()
+    # 固定行程的核心保证: 只要不撞 h_min/h_safe_high 边界, 各 cmd_height 起跳行程一致。
+    for h_start in (0.100, 0.110, 0.120, 0.130):
+        traj = JumpTrajectory(params, h_start=h_start, cmd_jump_amplitude=1.0)
+        assert traj.h_high - traj.h_low == pytest.approx(params.extend_stroke, abs=1e-6)
 
 
 def test_jump_trajectory_adaptive_crouch_clamped_to_h_min() -> None:
