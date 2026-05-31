@@ -4,9 +4,14 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import mujoco
+import pytest
 
 from sim.launch_mujoco import build_controlled_model
-from sim.model_xml import prepare_controlled_mujoco_xml
+from sim.model_xml import (
+    SingleWheelTrapezoidTerrain,
+    WavyRoadTerrain,
+    prepare_controlled_mujoco_xml,
+)
 
 
 def test_single_wheel_trapezoid_terrain_is_injected_after_preprocessing(tmp_path: Path) -> None:
@@ -51,14 +56,19 @@ def test_single_wheel_trapezoid_width_is_halved_without_changing_side_profile(tm
     assert ramp is not None
     assert platform is not None
 
+    cfg = SingleWheelTrapezoidTerrain()
+    ramp_span = (cfg.ramp_length**2 + cfg.height**2) ** 0.5
+    # Wedge thickness mirrors _add_single_wheel_trapezoid: thickness * cos >= height.
+    expected_thickness = cfg.height * ramp_span / cfg.ramp_length + 0.005
+
     ramp_size = _float_triplet(ramp.get("size"))
     platform_size = _float_triplet(platform.get("size"))
-    assert ramp_size[0] == 0.2
-    assert platform_size[0] == 0.2
-    assert ramp_size[1] == 0.101519703
-    assert ramp_size[2] == 0.01
-    assert platform_size[1] == 0.125
-    assert platform_size[2] == 0.0175
+    assert ramp_size[0] == pytest.approx(0.5 * cfg.width)
+    assert platform_size[0] == pytest.approx(0.5 * cfg.width)
+    assert ramp_size[1] == pytest.approx(0.5 * ramp_span)
+    assert ramp_size[2] == pytest.approx(0.5 * expected_thickness)
+    assert platform_size[1] == pytest.approx(0.5 * cfg.platform_length)
+    assert platform_size[2] == pytest.approx(0.5 * cfg.height)
 
 
 def test_wavy_road_terrain_coexists_with_trapezoid(tmp_path: Path) -> None:
@@ -81,7 +91,9 @@ def test_wavy_road_terrain_coexists_with_trapezoid(tmp_path: Path) -> None:
     assert geom.get("hfield") == "wavy_road_hfield"
     assert geom.get("contype") == "1"
     assert geom.get("conaffinity") == "1"
-    assert _float_quad(hfield.get("size")) == (0.3, 0.6, 0.036, 0.02)
+    wr = WavyRoadTerrain()
+    expected_hfield = (0.5 * wr.width, 0.5 * wr.length, 2.0 * wr.amplitude, wr.base_depth)
+    assert _float_quad(hfield.get("size")) == pytest.approx(expected_hfield)
     assert (tmp_path / "wavy_road_hfield.png").is_file()
 
     model = mujoco.MjModel.from_xml_path(str(model_path))
@@ -89,9 +101,9 @@ def test_wavy_road_terrain_coexists_with_trapezoid(tmp_path: Path) -> None:
     geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "wavy_road")
     assert hfield_id >= 0
     assert geom_id >= 0
-    assert model.hfield_nrow[hfield_id] == 241
-    assert model.hfield_ncol[hfield_id] == 13
-    assert model.hfield_size[hfield_id].tolist() == [0.3, 0.6, 0.036, 0.02]
+    assert model.hfield_nrow[hfield_id] == wr.nrow
+    assert model.hfield_ncol[hfield_id] == wr.ncol
+    assert model.hfield_size[hfield_id].tolist() == pytest.approx(list(expected_hfield))
 
 
 def test_single_wheel_trapezoid_keeps_closed_loop_equality_constraints(tmp_path: Path) -> None:

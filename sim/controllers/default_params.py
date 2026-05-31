@@ -10,6 +10,7 @@
     4. LQR balance: q_diag[0:4], r_diag                (pitch/roll 不发散)
     5. Forward:     pitch_lean_gain, velocity_ki       (跟踪 target_velocity)
     6. Yaw:         yaw_damping → yaw_ki               (P 先, 必要时再 I)
+       Heading:     heading_hold_kp                    (航向保持, 串级在 yaw 阻尼外)
     7. Jump:        见 launch_mujoco MANUAL_JUMP_*     (air_height_max, crouch_depth)
 """
 from __future__ import annotations
@@ -28,7 +29,7 @@ from sim.controllers.vmc import VmcParams
 
 STAND_PARAMS = CombinedParams(
     vmc=VmcParams(
-        nominal_height=0.142,  # mid of LUT range [0.134, 0.149]
+        nominal_height=0.142,  # 站姿腿高 (m). LUT 范围 [0.0784, 0.1537]; 142mm 已贴近伸长上限 (余 ~12mm)
         kp_motor=30.0,
         kd_motor=1.0,
         kp_land=15.0,   # 旧 land_kp_scale=0.5 × kp_motor=30 的等价绝对值
@@ -37,7 +38,8 @@ STAND_PARAMS = CombinedParams(
         flight_pitch_kd=1.5,
         roll_level_kp_height=0.0,
         roll_level_kd_height=0.002,
-        roll_level_offset_limit=0.010,
+        roll_level_offset_limit=0.035,  # 单侧腿高差上限; 0.035 可调平 ~65mm 单轮高差 (需 ±32.5mm)
+        slope_squat_margin=0.005,       # 上坡降站高: 伸长腿离 h_max 至少留 5mm
     ),
     # 2026-05-16 retune after mass rebalance (10.24 kg → 2.20 kg).
     # B matrix scaled ~7× because B ∝ 1/(M·L) and CoM dropped 36 mm.
@@ -66,6 +68,11 @@ STAND_PARAMS = CombinedParams(
     position_velocity_limit=0.6,
     yaw_damping=0.5,
     yaw_ki=0.0,
+    # 航向保持: 未发转向指令 (target_yaw_rate≈0) 且站立接地时锁定当前航向, 抵抗扰动。
+    # kp=2.0: 0.1rad(5.7°) 偏航 → 0.2rad/s 回正参考; rate_limit 限幅 0.8rad/s 防猛回正。
+    # 保守起点, 实机可在 yaw_damping 冻结后再上调。
+    heading_hold_kp=2.0,
+    heading_hold_rate_limit=0.8,
     fixed_height=False,
     lqr_height_bin_size=0.02,
     # 2026-05-26 ff_gain 默认 0:旧值 4.0 把 leg-height-rate 信号 (经过 LUT
@@ -88,7 +95,8 @@ STAND_THEN_DRIVE_PARAMS = CombinedParams(
         flight_pitch_kd=1.5,
         roll_level_kp_height=0.0,
         roll_level_kd_height=0.002,
-        roll_level_offset_limit=0.010,
+        roll_level_offset_limit=0.035,
+        slope_squat_margin=0.005,
     ),
     q_diag=np.array([1000.0, 200.0, 1000.0, 200.0, 300.0]),
     r_diag=np.array([200.0, 400.0]),
@@ -99,6 +107,8 @@ STAND_THEN_DRIVE_PARAMS = CombinedParams(
     position_velocity_limit=0.6,
     yaw_damping=0.5,
     yaw_ki=0.0,
+    heading_hold_kp=2.0,
+    heading_hold_rate_limit=0.8,
 )
 
 # 跳跃相位机默认参数
@@ -121,6 +131,7 @@ def params_to_dict(params: CombinedParams) -> dict[str, Any]:
             "roll_level_kp_height": params.vmc.roll_level_kp_height,
             "roll_level_kd_height": params.vmc.roll_level_kd_height,
             "roll_level_offset_limit": params.vmc.roll_level_offset_limit,
+            "slope_squat_margin": params.vmc.slope_squat_margin,
         },
         "q_diag": params.q_diag.tolist(),
         "r_diag": params.r_diag.tolist(),
@@ -133,6 +144,8 @@ def params_to_dict(params: CombinedParams) -> dict[str, Any]:
         "yaw_damping": params.yaw_damping,
         "yaw_ki": params.yaw_ki,
         "target_yaw_rate": params.target_yaw_rate,
+        "heading_hold_kp": params.heading_hold_kp,
+        "heading_hold_rate_limit": params.heading_hold_rate_limit,
         "fixed_height": params.fixed_height,
         "lqr_height_bin_size": params.lqr_height_bin_size,
         "ff_gain": params.ff_gain,
@@ -154,6 +167,7 @@ def params_from_dict(d: dict[str, Any]) -> CombinedParams:
             roll_level_kp_height=vmc_data.get("roll_level_kp_height", 0.0),
             roll_level_kd_height=vmc_data.get("roll_level_kd_height", 0.0),
             roll_level_offset_limit=vmc_data.get("roll_level_offset_limit", 0.0),
+            slope_squat_margin=vmc_data.get("slope_squat_margin", 0.0),
         ),
         q_diag=np.array(d["q_diag"]),
         r_diag=np.array(d["r_diag"]),
@@ -166,6 +180,8 @@ def params_from_dict(d: dict[str, Any]) -> CombinedParams:
         yaw_damping=d.get("yaw_damping", 0.5),
         yaw_ki=d.get("yaw_ki", 0.0),
         target_yaw_rate=d.get("target_yaw_rate", 0.0),
+        heading_hold_kp=d.get("heading_hold_kp", 0.0),
+        heading_hold_rate_limit=d.get("heading_hold_rate_limit", 1.0),
         fixed_height=d.get("fixed_height", True),
         lqr_height_bin_size=d.get("lqr_height_bin_size", 0.02),
         ff_gain=d.get("ff_gain", 0.0),

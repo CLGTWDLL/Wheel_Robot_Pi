@@ -32,6 +32,7 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
     params.vmc.roll_level_kp_height = 0.031
     params.vmc.roll_level_kd_height = 0.006
     params.vmc.roll_level_offset_limit = 0.005
+    params.vmc.slope_squat_margin = 0.009
 
     restored = params_from_dict(params_to_dict(params))
 
@@ -55,6 +56,7 @@ def test_combined_params_roundtrip_preserves_control_fields() -> None:
     assert restored.vmc.roll_level_kp_height == params.vmc.roll_level_kp_height
     assert restored.vmc.roll_level_kd_height == params.vmc.roll_level_kd_height
     assert restored.vmc.roll_level_offset_limit == params.vmc.roll_level_offset_limit
+    assert restored.vmc.slope_squat_margin == params.vmc.slope_squat_margin
 
 
 def test_params_from_dict_disables_roll_leveling_for_old_configs() -> None:
@@ -71,21 +73,24 @@ def test_params_from_dict_disables_roll_leveling_for_old_configs() -> None:
 
 
 def test_params_from_dict_supplies_defaults_for_new_land_fields() -> None:
-    """旧 JSON 不含 kp_land/kd_land/flight_pitch_kd 时, fallback 到当前默认."""
+    """旧 JSON 不含 kp_land/kd_land/flight_pitch_kd/slope_squat_margin 时, fallback 到当前默认."""
     data = params_to_dict(STAND_PARAMS)
     data["vmc"].pop("kp_land")
     data["vmc"].pop("kd_land")
     data["vmc"].pop("flight_pitch_kd")
+    data["vmc"].pop("slope_squat_margin")
 
     restored = params_from_dict(data)
 
     assert restored.vmc.kp_land == 15.0
     assert restored.vmc.kd_land == 3.5
     assert restored.vmc.flight_pitch_kd == 1.5
+    assert restored.vmc.slope_squat_margin == 0.0
 
 
 def test_stand_params_enable_roll_leveling_by_default() -> None:
     assert STAND_PARAMS.r_diag.tolist() == [200.0, 400.0]
     assert STAND_PARAMS.vmc.roll_level_kp_height == 0.0
     assert STAND_PARAMS.vmc.roll_level_kd_height == 0.002
-    assert STAND_PARAMS.vmc.roll_level_offset_limit == 0.010
+    assert STAND_PARAMS.vmc.roll_level_offset_limit == 0.035
+    assert STAND_PARAMS.vmc.slope_squat_margin == 0.005

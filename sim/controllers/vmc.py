@@ -70,11 +70,15 @@ class VmcParams:
     # FLIGHT 期间对称腿 motor 上的 pitch_rate 阻尼增益 (N·m per rad/s).
     # 见 _control() FLIGHT 分支注释 — 仅 D 项, 加 P 会与 leg-gravity 偏置形成正反馈.
     flight_pitch_kd: float = 1.5
-    # STAND 斜坡找平: 用 roll/roll_rate 调左右腿高差实现自平衡.
-    # 默认 0 = off; 仅 scripts/verify_single_wheel_ramp.py 实验用.
+    # STAND 斜坡找平: 测左右轮高差做前馈, 调左右腿高差把 base 调平 (纯前馈, kp 默认 0).
+    # roll_level_offset_limit 是左右腿高差的单侧上限 (m); 0 = off.
     roll_level_kp_height: float = 0.0
     roll_level_kd_height: float = 0.0
     roll_level_offset_limit: float = 0.0
+    # 上坡降站高: 找平需要大高差时降低共模站高, 给"伸长"那条腿留出 LUT 余量.
+    # nominal 142mm 离 h_max 153.7mm 只有 ~12mm, 不降站高就伸不出去调平大高差.
+    # 纯前馈, 由当前 roll_level 偏置量驱动. 值 = 伸长腿离 h_max 至少保留的余量 (m); 0 = off.
+    slope_squat_margin: float = 0.0
     lut: LegHeightLUT = field(default_factory=LegHeightLUT.from_json)
 
 
@@ -127,6 +131,7 @@ class VmcController:
             self.params.roll_level_kp_height,
             self.params.roll_level_kd_height,
             self.params.roll_level_offset_limit,
+            self.params.slope_squat_margin,
         ])
         if not np.all(np.isfinite(params_values)):
             raise ValueError("VMC params must be finite")
@@ -255,13 +260,14 @@ class VmcController:
 
         neutral_offsets = self._neutral_offsets(model, data)
         roll_level_offsets = self._roll_level_height_offsets(model, data, phase, state)
+        common_height = self._slope_squat_height(target_height, roll_level_offsets, phase)
 
         for side, geometry in LEG_CLOSED_LOOP.items():
             act_idx = addresses.actuators[geometry.motor_joint]
             motor_qpos_idx = addresses.joint_qpos[geometry.motor_joint]
             motor_qvel_idx = addresses.joint_qvel[geometry.motor_joint]
 
-            side_target_height = target_height + neutral_offsets[side] + roll_level_offsets[side]
+            side_target_height = common_height + neutral_offsets[side] + roll_level_offsets[side]
             self.last_target_heights[side] = side_target_height
             target_motor_angle = self.params.lut.motor_angle_from_height(side_target_height)
             previous_angle = self._target_motor_angle_prev.get(side)
@@ -348,6 +354,25 @@ class VmcController:
         )
         offset = float(np.clip(offset, -limit, limit))
         return {"left": offset, "right": -offset}
+
+    def _slope_squat_height(
+        self,
+        target_height: float,
+        roll_level_offsets: dict[str, float],
+        phase: JumpPhase,
+    ) -> float:
+        """上坡降站高: 找平指令大高差时降低共模站高, 让"伸长"腿不顶 LUT 上限。
+
+        cap = h_max - margin - 最大单侧偏置。纯前馈 (由 roll_level 偏置驱动),
+        不引入 roll 闭环。平地 (偏置≈0) 时 cap > nominal → 原样返回, 不影响平地;
+        非 STAND (跳跃) 时直接返回 target_height。
+        """
+        margin = float(self.params.slope_squat_margin)
+        if margin <= 0.0 or phase != JumpPhase.STAND:
+            return target_height
+        max_offset = max((abs(v) for v in roll_level_offsets.values()), default=0.0)
+        cap = float(self.params.lut.h_max) - margin - max_offset
+        return float(min(target_height, cap))
 
     def _neutral_offsets(self, model: mujoco.MjModel, data: mujoco.MjData) -> dict[str, float]:
         offsets = self._neutral_height_offsets.get(id(model))

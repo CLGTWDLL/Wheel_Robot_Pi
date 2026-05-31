@@ -32,7 +32,7 @@ def main():
         sys.exit(1)
 
     # Load URDF via MuJoCo (handles oversized mesh splitting) and preprocess
-    from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _configure_geom_collisions
+    from sim.model_xml import _urdf_to_mjcf, _ensure_equality_constraints, _configure_geom_collisions, _apply_link_materials
     tmp_dir = Path(tempfile.mkdtemp())
     converted_xml = _urdf_to_mjcf(urdf_path, tmp_dir)
 
@@ -112,6 +112,9 @@ def main():
     # Disable mesh collisions (avoid internal tension from non-convex CAD overlaps)
     _configure_geom_collisions(root)
 
+    # Tint legs (carbon fibre) and link3 (aluminium) so the model is not uniform grey.
+    _apply_link_materials(root)
+
     # Add the virtual connections (equality constraints).
     _ensure_equality_constraints(root)
 
@@ -133,6 +136,11 @@ def main():
 
     import time
     with mujoco.viewer.launch_passive(model, data) as viewer:
+        # --- 默认开启 base_link 相机跟随 ---
+        with viewer.lock():
+            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+            viewer.cam.trackbodyid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
+
         print("=" * 60)
         print("Base is FIXED. Gravity is OFF.")
         print("Drag Control sliders to set joint angles directly.")

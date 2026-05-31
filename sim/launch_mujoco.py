@@ -760,6 +760,11 @@ def main() -> None:
             v.opt.geomgroup[1] = 0 # Hide visual
             v.opt.geomgroup[3] = 1 # Show collision
 
+        # --- 新增：默认开启 base_link 相机跟随 ---
+        with v.lock():
+            v.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+            v.cam.trackbodyid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
+
     if args.mode == "viewer":
         prepared_xml = prepare_controlled_mujoco_xml(args.xml) if args.show_collision else prepare_mujoco_xml(args.xml)
         model = mujoco.MjModel.from_xml_path(str(prepared_xml))

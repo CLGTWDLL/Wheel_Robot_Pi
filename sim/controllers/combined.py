@@ -17,6 +17,11 @@ from sim.state import SimState, body_id, model_addresses
 JUMP_PHASES = (JumpPhase.CROUCH, JumpPhase.EXTEND, JumpPhase.FLIGHT, JumpPhase.LAND)
 
 
+def _wrap_to_pi(angle: float) -> float:
+    """把角度规整到 (-pi, pi], 用于航向误差的最短路径回正。"""
+    return float((angle + np.pi) % (2.0 * np.pi) - np.pi)
+
+
 @dataclass
 class CombinedParams:
     """LQR+VMC 组合控制器参数。
@@ -33,7 +38,7 @@ class CombinedParams:
     - FALLEN: 全 0。
 
     调参顺序 (实机/headless 通用, 详见 default_params.py 顶部说明):
-      VMC PD → LQR balance → forward (pitch_lean) → yaw → jump.
+      VMC PD → LQR balance → forward (pitch_lean) → yaw → heading_hold → jump.
 
     Attributes:
         vmc: VMC 高度控制参数。
@@ -52,6 +57,12 @@ class CombinedParams:
         yaw_damping: yaw 角速度比例阻尼增益 (P)。
         yaw_ki: yaw 角速度积分增益 (I)。
         target_yaw_rate: 目标 yaw 角速度 (rad/s)。
+        heading_hold_kp: 航向保持外环 P 增益。航向误差 [rad] → yaw-rate 参考 [rad/s]。
+            仅 target_yaw_rate≈0 (未发转向指令) 且站立接地时启用。与位置外环
+            (_position_outer_loop) 同构: 锁定当前航向, 把航向误差串级成 yaw-rate
+            参考喂进 yaw 阻尼内环, 抵抗外部扰动保持方向不变。0 = 关闭 (默认, 保持旧行为)。
+        heading_hold_rate_limit: 航向保持外环输出 yaw-rate 参考的幅度上限 (rad/s),
+            防止大航向误差时猛回正干扰平衡。
         fixed_height: True 时 LQR gain 锁定在 _initialize_lqr 那一刻的值,
             后续不再随几何变化重算 (适合 cmd_height 固定的场景, 节省 CPU)。
             False (默认) 动态更新 LQR gain: 静止平地高度变化时沿 height
@@ -75,6 +86,9 @@ class CombinedParams:
     yaw_damping: float = 0.5
     yaw_ki: float = 0.0
     target_yaw_rate: float = 0.0
+    # 航向保持: 默认关闭 (kp=0), 保持旧 yaw-rate 阻尼行为不变。见 Attributes 说明。
+    heading_hold_kp: float = 0.0
+    heading_hold_rate_limit: float = 1.0
     fixed_height: bool = True
     lqr_height_bin_size: float = 0.02
     ff_gain: float = 0.0
@@ -98,6 +112,7 @@ class CombinedController:
         self._height_wheel_velocity_ff: float = 0.0
         self._last_phase = JumpPhase.STAND
         self._position_anchor: np.ndarray | None = None
+        self._heading_anchor: float | None = None
         self._equilibrium_pitch: float = 0.0
 
     @property
@@ -257,6 +272,38 @@ class CombinedController:
         limit = max(float(self.params.position_velocity_limit), 0.0)
         return float(np.clip(vel_correction, -limit, limit))
 
+    def _base_heading(self, model: Any, data: Any) -> float:
+        """本体前向 (+Y) 在世界 XY 平面投影的航向角 (rad)。
+
+        与 _position_outer_loop 的 forward 定义一致 (rotation[:,1] = 本体 Y 轴)。
+        投影到水平面后取 atan2, 对俯仰倾角不敏感 (pitch 只改变投影长度不改方位角)。
+        """
+        base_id = body_id(model, "base_link")
+        rotation = np.asarray(data.xmat[base_id]).reshape(3, 3)
+        forward_horiz = rotation[:2, 1]
+        if float(np.linalg.norm(forward_horiz)) < 1e-6:
+            return 0.0
+        return float(np.arctan2(forward_horiz[1], forward_horiz[0]))
+
+    def _heading_outer_loop(self, model: Any, data: Any) -> float:
+        """航向保持 P 外环。返回 yaw-rate 参考 (rad/s), 串级进 _compute_yaw_correction。
+
+        仅在: 有 anchor + 未发转向指令 (target_yaw_rate≈0) + heading_hold_kp>0 时输出。
+        error = wrap(anchor - heading); rate_ref = clip(kp*error, ±rate_limit)。
+        sign: 实际 yaw_rate>0 (本体绕 +Z, 上升航向角) 会减小 error, 故 rate_ref 与
+        error 同号即构成稳定回正 (内环把 yaw_rate 拉向 rate_ref)。仅 STAND 接地时调用。
+        """
+        if self._heading_anchor is None:
+            return 0.0
+        if abs(self.params.target_yaw_rate) > 1e-6:
+            return 0.0
+        kp = float(self.params.heading_hold_kp)
+        if kp <= 0.0:
+            return 0.0
+        error = _wrap_to_pi(self._heading_anchor - self._base_heading(model, data))
+        limit = max(float(self.params.heading_hold_rate_limit), 0.0)
+        return float(np.clip(kp * error, -limit, limit))
+
     def _update_lqr_target(self, model: Any, data: Any, state: SimState, dt: float) -> None:
         """STAND 阶段的 LQR 目标更新。equilibrium_pitch 跟随当前几何重算。
 
@@ -290,9 +337,16 @@ class CombinedController:
         self._lqr_controller.target[3] = 0.0
         self._lqr_controller.target[4] = velocity_target
 
-    def _compute_yaw_correction(self, state: SimState, dt: float) -> float:
+    def _compute_yaw_correction(self, state: SimState, dt: float, heading_rate_ref: float = 0.0) -> float:
+        """yaw 角速度阻尼内环。effective_target = target_yaw_rate + 航向保持外环参考。
+
+        航向保持把航向角误差转成 yaw-rate 参考 (heading_rate_ref) 串级进来; 不发转向
+        指令时它驱动本环把实际 yaw_rate 拉向"回正所需角速度", 从而把航向拉回 anchor。
+        heading_rate_ref=0 时退化为原始 yaw-rate 阻尼 (跳跃相位即走此路径)。
+        """
         yaw_rate = float(state.base_angular_velocity[2])
-        yaw_error = yaw_rate - self.params.target_yaw_rate
+        effective_target_yaw_rate = self.params.target_yaw_rate + heading_rate_ref
+        yaw_error = yaw_rate - effective_target_yaw_rate
         self._yaw_integral += yaw_error * dt
         self._yaw_integral = float(np.clip(self._yaw_integral, -5.0, 5.0))
         return self.params.yaw_damping * yaw_error + self.params.yaw_ki * self._yaw_integral
@@ -362,16 +416,25 @@ class CombinedController:
         self._height_wheel_velocity_ff = 0.0
         self._lqr_controller = None
         self._position_anchor = None
+        self._heading_anchor = None
 
-    def _handle_stand_entry(self, state: SimState) -> None:
-        """STAND 进入瞬间: 清积分,锁位置 anchor。"""
+    def _handle_stand_entry(self, model: Any, data: Any, state: SimState) -> None:
+        """STAND 进入瞬间: 清积分,锁位置 anchor + 航向 anchor。"""
         if self._last_phase != JumpPhase.STAND:
             self._velocity_integral = 0.0
             self._position_anchor = np.array(state.base_position[:2], dtype=float)
+            self._heading_anchor = self._base_heading(model, data)
         if abs(self.params.target_velocity) > 1e-6:
             self._position_anchor = None
         elif self._position_anchor is None:
             self._position_anchor = np.array(state.base_position[:2], dtype=float)
+        # 航向 anchor 与位置 anchor 独立: 发转向指令时丢弃, 松开 (≈0) 时重新锁定当前航向。
+        # 注意只看 target_yaw_rate, 与 target_velocity 无关 — 直线行驶 (有速度无转向)
+        # 时仍保持航向, 抵抗偏航漂移。
+        if abs(self.params.target_yaw_rate) > 1e-6:
+            self._heading_anchor = None
+        elif self._heading_anchor is None:
+            self._heading_anchor = self._base_heading(model, data)
 
     def _handle_jump_entry(self) -> None:
         """跳跃序列开始: 清积分,丢 anchor。LQR controller 本身保留 (gain 只依赖几何)。"""
@@ -379,6 +442,7 @@ class CombinedController:
             self._velocity_integral = 0.0
             self._yaw_integral = 0.0
             self._position_anchor = None
+            self._heading_anchor = None
         self._height_wheel_velocity_ff = 0.0
 
     # ---------- Phase-dispatched control ----------
@@ -421,7 +485,8 @@ class CombinedController:
             raise ValueError("LQR virtual control must have shape (2,)")
         if state.contact_count >= len(LEG_CLOSED_LOOP):
             forward_torque = float(lqr_control[0])
-            yaw_correction = self._compute_yaw_correction(state, dt)
+            heading_rate_ref = self._heading_outer_loop(model, data)
+            yaw_correction = self._compute_yaw_correction(state, dt, heading_rate_ref)
         else:
             forward_torque = 0.0
             yaw_correction = 0.0
@@ -518,7 +583,7 @@ class CombinedController:
             return vmc_control
 
         if phase == JumpPhase.STAND:
-            self._handle_stand_entry(state)
+            self._handle_stand_entry(model, data, state)
             control = self._stand_control(model, data, state, dt, vmc_control, addresses)
         else:
             # CROUCH / EXTEND / LAND: LQR 轮平衡 + VMC 轨迹独占腿

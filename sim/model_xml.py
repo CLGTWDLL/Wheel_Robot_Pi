@@ -20,25 +20,26 @@ CMD_SLIDER_NAMES = ("cmd_linear_x", "cmd_angular_z", "cmd_height", "cmd_jump")
 @dataclass(frozen=True)
 class SingleWheelTrapezoidTerrain:
     side: str = "left"
-    height: float = 0.035
+    height: float = 0.065
     ramp_length: float = 0.20
     platform_length: float = 0.25
     width: float = 0.40
     y_start: float = 0.22
     side_x: float = 0.125
-    thickness: float = 0.02
 
 
 @dataclass(frozen=True)
 class WavyRoadTerrain:
-    """Washboard road: pure sinusoid along y (forward), constant across x."""
+    """Washboard road along y (forward): sinusoid with per-crest random height, constant across x."""
 
     y_start: float = 1.05
     length: float = 1.20          # along y (forward direction)
     width: float = 0.60           # along x (lateral)
-    amplitude: float = 0.018      # half peak-to-peak; peak-to-peak = 36 mm = one wheel radius
+    amplitude: float = 0.03       # half peak-to-peak; max peak-to-peak = 60 mm before random scaling
     wavelength: float = 0.35      # along y
     base_depth: float = 0.02
+    height_min_scale: float = 0.6  # each crest height ~ uniform[min_scale, 1] * 2*amplitude (>= old 36 mm)
+    seed: int = 0                 # RNG seed for per-crest height randomisation
     nrow: int = 241               # along y: ~5 mm/cell, ~70 cells per wavelength
     ncol: int = 13                # along x: ~50 mm/cell, sufficient (profile constant in x)
 
@@ -99,6 +100,7 @@ def prepare_controlled_mujoco_xml(
 
     _make_mesh_paths_absolute(root, prepared_xml.parent)
     _ensure_world_environment(root)
+    _apply_link_materials(root)
     _ensure_test_terrain(root, terrain, terrain_side, output_root)
     _ensure_root_freejoint(root)
     _ensure_command_slider_joints(root)
@@ -186,6 +188,69 @@ def _ensure_world_environment(root: ET.Element) -> None:
         root.insert(0, ET.Element("option", {"gravity": "0 0 -9.81"}))
 
 
+# Material appearance per part. The legs and parallel links read as dark glossy
+# carbon fibre; the wheels read as matte black rubber, so the robot is no longer
+# one uniform grey casting.
+_LINK_MATERIALS: dict[str, dict[str, str]] = {
+    "carbon_fiber": {
+        "rgba": "0.11 0.11 0.12 1",
+        "specular": "0.5",
+        "shininess": "0.6",
+        "reflectance": "0.12",
+    },
+    "tire_black": {
+        "rgba": "0.02 0.02 0.02 1",
+        "specular": "0.2",
+        "shininess": "0.25",
+        "reflectance": "0.0",
+    },
+}
+
+# Link body name prefix -> material. Legs (link1 upper + link2 lower) and the
+# passive parallel link (link3) are carbon fibre; the wheels are matte black.
+_LINK_PREFIX_MATERIALS: dict[str, str] = {
+    "link1_left": "carbon_fiber",
+    "link1_right": "carbon_fiber",
+    "link2_left": "carbon_fiber",
+    "link2_right": "carbon_fiber",
+    "link3_left": "carbon_fiber",
+    "link3_right": "carbon_fiber",
+    "wheel_left": "tire_black",
+    "wheel_right": "tire_black",
+}
+
+
+def _apply_link_materials(root: ET.Element) -> None:
+    """Tint leg/link mesh geoms by material so the robot is not uniform grey.
+
+    Each link emits BOTH a "<link>_visual" and a coincident "<link>_collision"
+    mesh geom, and both are visible (group 1). Tinting only "_visual" leaves the
+    grey "_collision" duplicate rendering on top, so the robot stays uniform
+    grey. We therefore tint every mesh geom of the link. MuJoCo also lets a
+    geom's rgba override its material colour, so set rgba explicitly for the
+    diffuse colour and keep the material for the specular/gloss response.
+    """
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+    for mat_name, attrs in _LINK_MATERIALS.items():
+        if asset.find(f"material[@name='{mat_name}']") is None:
+            ET.SubElement(asset, "material", {"name": mat_name, **attrs})
+
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        return
+    for geom in worldbody.iter("geom"):
+        if geom.get("type") != "mesh":
+            continue
+        name = geom.get("name", "")
+        for prefix, material in _LINK_PREFIX_MATERIALS.items():
+            if name.startswith(prefix):
+                geom.set("material", material)
+                geom.set("rgba", _LINK_MATERIALS[material]["rgba"])
+                break
+
+
 def _ensure_test_terrain(root: ET.Element, terrain: str | None, terrain_side: str, output_root: Path) -> None:
     if terrain is None:
         return
@@ -208,16 +273,21 @@ def _add_single_wheel_trapezoid(root: ET.Element, config: SingleWheelTrapezoidTe
     ramp_length = float(config.ramp_length)
     platform_length = float(config.platform_length)
     width = float(config.width)
-    thickness = float(config.thickness)
     y_start = float(config.y_start)
     x_pos = float(config.side_x if config.side == "left" else -config.side_x)
-    if min(height, ramp_length, platform_length, width, thickness) <= 0.0:
+    if min(height, ramp_length, platform_length, width) <= 0.0:
         raise ValueError("single-wheel trapezoid terrain dimensions must be positive")
 
     ramp_span = (ramp_length * ramp_length + height * height) ** 0.5
     angle = atan2(height, ramp_length)
     cos_angle = cos(angle)
     sin_angle = sin(angle)
+    # Make each ramp a solid wedge instead of a thin floating slab: thicken the
+    # tilted box downward until its underside is buried below the floor across
+    # the whole span (thickness * cos >= height). The top face — the climbing
+    # surface — stays fixed regardless of thickness, so contact behaviour is
+    # unchanged; this just closes the open triangular sides.
+    thickness = height / cos_angle + 0.005
     ramp_z = 0.5 * height - 0.5 * thickness * cos_angle
     y_half = 0.5 * width
 
@@ -325,7 +395,18 @@ def _wavy_road_heightmap(config: WavyRoadTerrain) -> np.ndarray:
     y = np.linspace(-0.5 * config.length, 0.5 * config.length, config.nrow)
     x = np.linspace(-0.5 * config.width, 0.5 * config.width, config.ncol)
 
-    profile = 0.5 + 0.5 * np.sin(2.0 * np.pi * y / config.wavelength)
+    # Base washboard sinusoid in [0, 1]: troughs sit at 0, crests at 1.
+    base = 0.5 + 0.5 * np.sin(2.0 * np.pi * y / config.wavelength)
+
+    # Give every crest an independent random height. The cycle index steps at
+    # the troughs (where base == 0), so scaling per cycle randomises bump
+    # heights while keeping the surface continuous at the cycle boundaries.
+    cycle = np.floor(y / config.wavelength + 0.25).astype(int)
+    cycle -= int(cycle.min())
+    rng = np.random.default_rng(config.seed)
+    scales = rng.uniform(config.height_min_scale, 1.0, size=int(cycle.max()) + 1)
+    profile = base * scales[cycle]
+
     heights = np.tile(profile[:, None], (1, config.ncol))
 
     # Smoothstep envelope so the patch fades into the surrounding floor instead
