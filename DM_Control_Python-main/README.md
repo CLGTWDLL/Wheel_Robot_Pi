@@ -12,7 +12,7 @@ pip install -r MOTORS/requirements.txt
 
 如果直接用命令行运行时出现模块找不到的问题，需要确认 `Contorl`、`MOTORS`、`IMU`、`Robor_State` 和 `Safe` 这几个目录已经加入 Python 的导入路径；在 IDE 中运行时也建议把项目根目录作为工作目录。
 
-MOTORS
+## MOTORS
 
 `MOTORS/DM_CAN.py` 是达妙电机通信和控制相关的库文件，里面定义了 `Motor`、`MotorControl`、电机型号、控制模式和参数读写等底层接口。项目里其他电机代码基本都调用这里的函数。这个文件属于底层库函数，不建议随意修改。
 
@@ -34,7 +34,7 @@ MOTORS
 
 `IMU/logs` 存放 IMU 调试时生成的 CSV 日志，用于回看姿态和角速度数据。
 
-Contorl
+## Contorl
 
 `Contorl/main.py` 是主函数入口。它会初始化四个电机、打开电机串口、读取 IMU、运行状态机、执行安全检查，并把电机和 IMU 状态绘制到 Rich 表格中。主循环中还会持续读取键盘输入，用于切换机器人状态。
 
@@ -44,7 +44,7 @@ Contorl
 
 `Contorl/robot_state.py` 是统一状态和 Rich 面板代码。`RobotState` 保存电机和 IMU 的最新状态，`RobotDashboard` 同时绘制电机状态、IMU 状态、安全状态、循环次数和当前模式。
 
-Robor_State
+## Robor_State
 
 `Robor_State/State.py` 是机器人状态机。目前包含四个主要状态：`IDLE`、`LEG_HOLD`、`FAULT` 和 `BALANCE`。
 
@@ -58,7 +58,7 @@ Robor_State
 
 按键 `q`、`Esc` 或空格也会进入故障停止状态，方便调试时快速停机。
 
-Safe
+## Safe
 
 `Safe/safe.py` 是电机安全保护模块。`SafetyMonitor` 负责判断是否触发故障，包括 IMU 超时、电机反馈超时、roll 角过大和力矩命令限幅等；`MotorSafetyActuator` 负责故障发生后的实际动作，会先发送零力矩命令，再逐个失能电机。
 
