@@ -13,19 +13,19 @@ import time
 # serial 用来创建达妙 USB-CAN 串口对象。
 import serial
 
-# 根目录用于稳定定位 IMU、MOTORS 和公共模块。
-ROOT = Path(__file__).resolve().parent
+# main.py lives in Contorl; the project root is one level above it.
+CONTROL_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CONTROL_DIR.parent
 
-# MOTORS 目录里放着达妙电机驱动 DM_CAN.py。
-MOTORS_DIR = ROOT / "MOTORS"
+# These module directories live under the project root, not under Contorl.
+MOTORS_DIR = PROJECT_ROOT / "MOTORS"
+STATE_DIR = PROJECT_ROOT / "Robor_State"
+SAFE_DIR = PROJECT_ROOT / "Safe"
 
-# 允许直接运行 main.py 时导入根目录模块。
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-# 允许直接运行 main.py 时导入 MOTORS/DM_CAN.py。
-if str(MOTORS_DIR) not in sys.path:
-    sys.path.insert(0, str(MOTORS_DIR))
+# Allow direct execution of Contorl/main.py from VS Code or PowerShell.
+for import_dir in (CONTROL_DIR, PROJECT_ROOT, MOTORS_DIR, STATE_DIR, SAFE_DIR):
+    if str(import_dir) not in sys.path:
+        sys.path.insert(0, str(import_dir))
 
 # 达妙电机对象、型号、控制模式和控制器来自官方驱动。
 from DM_CAN import Control_Type, DM_Motor_Type, Motor, MotorControl  # noqa: E402
@@ -44,8 +44,8 @@ from IMU.balance_signal import BalanceSignalProcessor  # noqa: E402
 # DMIMUSerialReader 负责读取 COM8 上的 IMU 数据。
 from IMU.imu_can import DMIMUSerialReader  # noqa: E402
 
-# RuntimeParameterManager 负责热更新 Manage.py 里的平衡参数。
-from Manage import RuntimeParameterManager  # noqa: E402
+# RuntimeParameterManager 负责热更新 Balance.py 里的平衡参数。
+from Balance import RuntimeParameterManager  # noqa: E402
 
 # RobotState 保存统一机器人状态；RobotDashboard 负责总 Rich 面板。
 from robot_state import RobotDashboard, RobotState  # noqa: E402
@@ -139,7 +139,7 @@ def main() -> None:
         )
     )
 
-    # 参数管理器会监听 Manage.py；保存新 Kp/Kd 后不重启也能生效。
+    # 参数管理器会监听 Balance.py；保存新 Kp/Kd 后不重启也能生效。
     parameter_manager = RuntimeParameterManager()
     parameter_manager.apply_to_state_machine(state_machine, force=True)
 
@@ -202,8 +202,15 @@ def main() -> None:
                     # 记录主循环次数。
                     loop_count += 1
 
-                    # 每隔很短时间检查一次 Manage.py，参数变了就立即写入状态机。
+                    # 每隔很短时间检查一次 Balance.py，参数变了就立即写入状态机。
                     parameter_manager.apply_to_state_machine(state_machine)
+
+                    # Use the latest wheel feedback to add velocity damping torque.
+                    if len(motors) >= 4:
+                        state_machine.update_wheel_velocity_feedback(
+                            motor3_velocity_rad_s=motors[2].getVelocity(),
+                            motor4_velocity_rad_s=motors[3].getVelocity(),
+                        )
 
                     # 电机命令集中在一个短函数里，便于后续替换控制律。
                     send_motor_commands(motor_control, motors, state_machine, safety)

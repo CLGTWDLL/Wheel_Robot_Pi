@@ -38,9 +38,9 @@ pip install -r MOTORS/requirements.txt
 
 `Contorl/main.py` 是主函数入口。它会初始化四个电机、打开电机串口、读取 IMU、运行状态机、执行安全检查，并把电机和 IMU 状态绘制到 Rich 表格中。主循环中还会持续读取键盘输入，用于切换机器人状态。
 
-`Contorl/Balance.py` 是原地平衡控制代码。它根据 pitch 和 pitch 角速度计算轮电机力矩，并让两个轮电机输出相反方向的力矩，同时保留关节电机的目标角度。
+`Contorl/Balance.py` 是原地平衡控制代码。它根据 pitch 和 pitch 角速度计算轮电机力矩，并让两个轮电机输出相反方向的力矩，同时保留关节电机的目标角度。主程序运行时也会定期检查这个文件，修改并保存顶部的平衡参数后，可以不用重启程序就更新到状态机里。
 
-`Contorl/Manage.py` 是运行时参数管理文件。主程序运行时会定期检查这个文件，修改并保存里面的平衡参数后，可以不用重启程序就更新到状态机里。常调的是Kp和Kd轮电机阻尼参数。
+`Contorl/Manage.py` 只保留旧入口兼容，新的 Kp、Kd 调参入口在 `Contorl/Balance.py` 顶部。
 
 `Contorl/robot_state.py` 是统一状态和 Rich 面板代码。`RobotState` 保存电机和 IMU 的最新状态，`RobotDashboard` 同时绘制电机状态、IMU 状态、安全状态、循环次数和当前模式。
 
@@ -66,6 +66,6 @@ pip install -r MOTORS/requirements.txt
 
 建议修改范围
 
-日常调参优先修改 `Contorl/Manage.py`、`Contorl/Balance.py` 和 `Robor_State/State.py`。如果只是观察状态或改显示内容，可以修改 `Contorl/robot_state.py`。
+日常调参优先修改 `Contorl/Balance.py` 和 `Robor_State/State.py`。如果只是观察状态或改显示内容，可以修改 `Contorl/robot_state.py`。
 
 不建议直接修改 `MOTORS/DM_CAN.py` 和 `MOTORS/DM_Motor_Test copy.py` 中来自底层库或验证过的通信逻辑，除非明确是在做电机协议适配或硬件接口变更。

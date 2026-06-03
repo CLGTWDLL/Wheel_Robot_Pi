@@ -10,7 +10,14 @@ from enum import Enum
 from math import degrees
 
 # BalanceController 负责根据 pitch/roll 生成轮电机平衡力矩。
-from Balance import BalanceConfig, BalanceController, BalanceOutput
+from Balance import (
+    BALANCE_MOTOR3_KD,
+    BALANCE_MOTOR4_KD,
+    BALANCE_WHEEL_KV,
+    BalanceConfig,
+    BalanceController,
+    BalanceOutput,
+)
 
 
 class RobotMode(str, Enum):
@@ -60,7 +67,7 @@ class StateMachineConfig:
     leg_hold_position_rad: float = 0.1
 
     # LEG_HOLD 时关节电机 MIT 位置刚度。
-    leg_hold_kp: float = 6.0
+    leg_hold_kp: float = 12.0
 
     # LEG_HOLD 时关节电机 MIT 阻尼。
     leg_hold_kd: float = 0.5
@@ -75,10 +82,10 @@ class StateMachineConfig:
     balance_config: BalanceConfig = field(default_factory=BalanceConfig)
 
     # BALANCE 模式下 0x03 轮毂电机的 MIT 速度阻尼。
-    balance_motor3_kd: float = 0.05
+    balance_motor3_kd: float = BALANCE_MOTOR3_KD
 
     # BALANCE 模式下 0x04 轮毂电机的 MIT 速度阻尼。
-    balance_motor4_kd: float = 0.1
+    balance_motor4_kd: float = BALANCE_MOTOR4_KD
 
     # 轮子和 IDLE 模式使用的零输出命令。
     zero_command: MITCommand = field(default_factory=MITCommand)
@@ -99,6 +106,8 @@ class RobotStateMachine:
         self._last_balance_pitch_deg = self.config.balance_config.target_pitch_deg
         self._last_balance_roll_deg = self.config.balance_config.target_roll_deg
         self._last_balance_pitch_rate_rad_s = 0.0
+        self._last_motor3_velocity_rad_s = 0.0
+        self._last_motor4_velocity_rad_s = 0.0
         self.balance_output = self.balance_controller.update(
             pitch_deg=self.config.balance_config.target_pitch_deg,
             roll_deg=self.config.balance_config.target_roll_deg,
@@ -154,13 +163,23 @@ class RobotStateMachine:
     def set_balance_gains(
         self,
         pitch_kp: float,
-        pitch_kd: float,
+        pitch_ki: float | None = None,
+        pitch_kd: float = 0.0,
+        wheel_kv: float | None = None,
         motor3_kd: float | None = None,
         motor4_kd: float | None = None,
     ) -> None:
-        """热更新 BALANCE 模式下 pitch 轴和轮毂电机的 Kd。"""
+        """Hot update BALANCE pitch PID gains and wheel motor Kd."""
         self.config.balance_config.pitch_torque_kp = float(pitch_kp)
+        if pitch_ki is not None:
+            old_ki = self.config.balance_config.pitch_torque_ki
+            self.config.balance_config.pitch_torque_ki = float(pitch_ki)
+            if self.config.balance_config.pitch_torque_ki != old_ki:
+                self.balance_controller.reset_integral()
         self.config.balance_config.pitch_rate_torque_kd = float(pitch_kd)
+        if wheel_kv is not None:
+            self.config.balance_config.wheel_velocity_kv = float(wheel_kv)
+            self.config.balance_wheel_kv = float(wheel_kv)
         if motor3_kd is not None:
             self.config.balance_motor3_kd = float(motor3_kd)
         if motor4_kd is not None:
@@ -170,6 +189,17 @@ class RobotStateMachine:
             roll_deg=self._last_balance_roll_deg,
             pitch_rate_rad_s=self._last_balance_pitch_rate_rad_s,
         )
+
+    def update_wheel_velocity_feedback(
+        self,
+        motor3_velocity_rad_s: float | None,
+        motor4_velocity_rad_s: float | None,
+    ) -> None:
+        """Update wheel velocity feedback used by BALANCE torque damping."""
+        if motor3_velocity_rad_s is not None:
+            self._last_motor3_velocity_rad_s = float(motor3_velocity_rad_s)
+        if motor4_velocity_rad_s is not None:
+            self._last_motor4_velocity_rad_s = float(motor4_velocity_rad_s)
 
     def update_balance_observation(
         self,
@@ -247,20 +277,28 @@ class RobotStateMachine:
         self._apply_joint_hold_commands(commands, target_q=target_q)
 
         if motor_count >= 3:
+            motor3_tau = (
+                self.balance_output.motor3_tau
+                - self.config.balance_wheel_kv * self._last_motor3_velocity_rad_s
+            )
             commands[2] = MITCommand(
                 kp=0.0,
                 kd=self.config.balance_motor3_kd,
                 q=0.0,
                 dq=0.0,
-                tau=self.balance_output.motor3_tau,
+                tau=motor3_tau,
             )
         if motor_count >= 4:
+            motor4_tau = (
+                self.balance_output.motor4_tau
+                - self.config.balance_wheel_kv * self._last_motor4_velocity_rad_s
+            )
             commands[3] = MITCommand(
                 kp=0.0,
                 kd=self.config.balance_motor4_kd,
                 q=0.0,
                 dq=0.0,
-                tau=self.balance_output.motor4_tau,
+                tau=motor4_tau,
             )
         return commands
 
