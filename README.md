@@ -1,4 +1,65 @@
-# wheel_robot
+# RhinoPi X1
+
+基于五杆闭环机构的轮腿机器人项目，结合 MuJoCo 建模、LQR + VMC 控制仿真与 CAN 电机、IMU 姿态反馈联调。
+
+![RhinoPi X1 五杆闭环 MuJoCo 模型](assets/rhinopi-x1-mujoco.png)
+
+*主图：由项目 URDF / STL 生成的 MuJoCo 模型渲染。*
+
+## 项目目标
+
+围绕轮腿机器人机构与控制系统，建立可用于调参和验证的五杆闭环仿真模型，并连接电机控制、姿态采集与实机诊断链路。
+
+- **机构建模**：从 URDF / STL 构建 MuJoCo 模型，保持五杆连杆的闭环约束。
+- **控制仿真**：采用 LQR 处理平衡与轮子输出，采用 VMC 处理腿部高度和力矩分配。
+- **实机联调**：通过 CAN 接入电机状态和 DM-IMU 姿态反馈，配合命令行工具与手柄 HID 采集进行调试。
+
+## My Contribution
+
+李浩涵（Haohan Li）在本项目中的参与工作：
+
+- 参与五杆机构建模、模型关系核对与模型调试。
+- 参与 CAN 电机通信与 IMU 姿态反馈的实机联调，协助排查通信和系统集成问题。
+- 协助 LQR + VMC 仿真的参数调试与运行观察。
+
+## System Architecture
+
+```mermaid
+flowchart LR
+    subgraph Simulation[建模与控制仿真]
+        Model[URDF / STL] --> MJ[五杆闭环 MuJoCo 模型]
+        MJ --> State[姿态与运动状态]
+        State --> LQR[LQR 平衡控制]
+        State --> VMC[VMC 腿部控制]
+        LQR --> Wheels[轮子力矩]
+        VMC --> Legs[关节力矩]
+        Wheels --> MJ
+        Legs --> MJ
+    end
+    subgraph Hardware[实机通信与诊断]
+        CLI[CAN 命令行工具] <--> Adapter[USB-CAN]
+        Adapter <--> Motors[DM4310 / DMH6215 电机]
+        IMU[DM-IMU 姿态反馈] --> Adapter
+        HID[手柄 HID 采集与解析]
+    end
+```
+
+| 组成 | 对应源码 |
+| --- | --- |
+| 五杆闭环模型生成 | [`sim/model_xml.py`](sim/model_xml.py)、[`sim/robot/robot.urdf`](sim/robot/robot.urdf) |
+| LQR + VMC 控制仿真 | [`sim/controllers/combined.py`](sim/controllers/combined.py)、[`sim/controllers/balance_lqr.py`](sim/controllers/balance_lqr.py)、[`sim/controllers/vmc.py`](sim/controllers/vmc.py) |
+| CAN 电机与 IMU 联调 | [`control/can_tool.py`](control/can_tool.py)、[`control/damiao_can/`](control/damiao_can/) |
+| 手柄 HID 采集 | [`scripts/collect_gamepad_hid_mapping.py`](scripts/collect_gamepad_hid_mapping.py) |
+
+## 关键结果
+
+- 完成五杆闭环 MuJoCo 模型搭建，模型生成管线包含左右腿闭环连杆约束。
+- 打通 CAN 电机通信与 IMU 姿态反馈链路，形成串口发现、总线监听、姿态读取及电机保守测试入口。
+- 建立 LQR + VMC 控制仿真与调参流程，结合模型状态进行运行观察和验证。
+
+## 技术文档
+
+以下保留项目的 HID、CAN 和实机测试操作文档。
 
 ## 手柄 HID 数据帧采集
 
